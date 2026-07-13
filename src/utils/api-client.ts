@@ -32,7 +32,7 @@ export interface StreamCallbacks {
 }
 
 /** CF Worker 代理地址 */
-const PROXY_URL = import.meta.env.VITE_PROXY_URL || 'https://ai-workstation-proxy.your-worker.workers.dev';
+const PROXY_URL = import.meta.env.VITE_PROXY_URL || 'https://ai-workstation-proxy.maynico.workers.dev/proxy';
 
 /** 本地搜索代理地址 */
 const SEARCH_URL = PROXY_URL.replace('/proxy', '/search');
