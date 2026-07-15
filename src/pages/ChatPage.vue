@@ -76,7 +76,7 @@
       </button>
 
       <!-- 消息列表 -->
-      <div class="message-list" ref="messageListRef">
+      <div class="message-list" ref="messageListRef" @click="handleMessageClick">
         <div v-if="messages.length === 0" class="empty-state">
           <div class="empty-icon">💬</div>
           <div class="empty-text">开始新的对话</div>
@@ -124,7 +124,19 @@
                 </div>
               </div>
               <!-- 正文内容 -->
-              <div class="message-text" v-html="formatMessage(msg.content)"></div>
+              <div class="message-text" :class="{ 'raw-mode': rawMdIds.has(msg.id) }">
+                <pre v-if="rawMdIds.has(msg.id)" class="raw-markdown">{{ msg.content }}</pre>
+                <div v-else v-html="formatMessage(msg.content)"></div>
+              </div>
+              <!-- Markdown 切换按钮 -->
+              <button
+                v-if="msg.role === 'assistant' && msg.content"
+                class="md-toggle-btn"
+                @click="toggleMdView(msg.id)"
+                :title="rawMdIds.has(msg.id) ? '渲染 Markdown' : '查看源码'"
+              >
+                {{ rawMdIds.has(msg.id) ? '📝 渲染' : '📄 源码' }}
+              </button>
               <!-- 协作结果详情 -->
               <div v-if="msg.crewResult" class="crew-result-section">
                 <button class="crew-result-toggle" @click="toggleCrewResult(msg.id)">
@@ -218,7 +230,19 @@
                 </div>
               </div>
               <!-- 正文内容 -->
-              <div class="message-text" v-html="formatMessage(streamingContent)"></div>
+              <div class="message-text" :class="{ 'raw-mode': rawMdIds.has('streaming') }">
+                <pre v-if="rawMdIds.has('streaming')" class="raw-markdown">{{ streamingContent }}</pre>
+                <div v-else v-html="formatMessage(streamingContent)"></div>
+              </div>
+              <!-- Markdown 切换按钮（流式） -->
+              <button
+                v-if="streamingContent"
+                class="md-toggle-btn"
+                @click="toggleMdView('streaming')"
+                :title="rawMdIds.has('streaming') ? '渲染 Markdown' : '查看源码'"
+              >
+                {{ rawMdIds.has('streaming') ? '📝 渲染' : '📄 源码' }}
+              </button>
               <span class="streaming-cursor">▌</span>
             </div>
           </div>
@@ -416,6 +440,7 @@ import { compressImage, validateImage } from '@/utils/image-compressor';
 import { generateWord, generatePPT, generateExcel, downloadBlob } from '@/utils/file-generator';
 import { showToast } from '@/components/Toast';
 import html2canvas from 'html2canvas';
+import { marked } from 'marked';
 import type { Agent, ModelConfig, Crew, CrewResult } from '@/types/model';
 
 const router = useRouter();
@@ -642,6 +667,17 @@ const isSearching = ref(false);
 const searchResults = ref<SearchResult[]>([]);
 const searchStatusText = ref('正在分析问题...');
 const sidebarOpen = ref(false);
+const rawMdIds = ref<Set<string>>(new Set());
+
+function toggleMdView(id: string) {
+  const newSet = new Set(rawMdIds.value);
+  if (newSet.has(id)) {
+    newSet.delete(id);
+  } else {
+    newSet.add(id);
+  }
+  rawMdIds.value = newSet;
+}
 
 watch(sidebarOpen, (val) => {
   if (!val) {
@@ -1017,11 +1053,46 @@ function autoResize(event: Event) {
 }
 
 function formatMessage(content: string): string {
-  return content
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    .replace(/`(.*?)`/g, '<code>$1</code>')
-    .replace(/\n/g, '<br>');
+  if (!content) return '';
+  try {
+    const html = (marked as any).parse(content, { gfm: true, async: false, breaks: false }) as string;
+    return addCopyButtonsToCodeBlocks(html);
+  } catch {
+    return content.replace(/\n/g, '<br>');
+  }
+}
+
+function addCopyButtonsToCodeBlocks(html: string): string {
+  return html.replace(
+    /<pre><code(?:\s+class="language-([^"]*)")?>([\s\S]*?)<\/code><\/pre>/g,
+    (_match: string, lang: string | undefined, code: string) => {
+      const language = lang || 'code';
+      const decoded = code
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .replace(/&#39;/g, "'")
+        .replace(/&quot;/g, '"');
+      return `<div class="code-block-wrapper"><div class="code-block-header"><span class="code-lang">${escapeHtml(language)}</span><button class="code-copy-btn" data-code="${escapeHtml(decoded)}">📋 复制</button></div><pre><code class="language-${escapeHtml(language)}">${code}</code></pre></div>`;
+    }
+  );
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function handleMessageClick(e: MouseEvent) {
+  const target = e.target as HTMLElement;
+  const btn = target.closest('.code-copy-btn') as HTMLButtonElement | null;
+  if (!btn) return;
+  const code = btn.getAttribute('data-code') || '';
+  if (!code) return;
+  navigator.clipboard.writeText(code).then(() => {
+    const original = btn.textContent || '';
+    btn.textContent = '✅ 已复制';
+    setTimeout(() => { btn.textContent = original || '📋 复制'; }, 1500);
+  }).catch(() => {});
 }
 
 function formatTime(timestamp: number): string {
@@ -1789,6 +1860,165 @@ onMounted(async () => {
   border-radius: var(--radius-sm);
   font-family: 'Courier New', monospace;
   font-size: var(--font-size-sm);
+}
+
+.message-text :deep(pre) {
+  background: rgba(0, 0, 0, 0.06);
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  margin: var(--spacing-sm) 0;
+}
+
+.message-text :deep(pre code) {
+  background: none;
+  padding: 0;
+  font-size: var(--font-size-sm);
+}
+
+/* 代码块容器（带复制按钮） */
+.message-text :deep(.code-block-wrapper) {
+  margin: var(--spacing-sm) 0;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+}
+
+.message-text :deep(.code-block-header) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+  background: var(--bg-tertiary);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.message-text :deep(.code-lang) {
+  font-weight: var(--font-weight-medium);
+  text-transform: lowercase;
+}
+
+.message-text :deep(.code-copy-btn) {
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.message-text :deep(.code-copy-btn:hover) {
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.message-text :deep(.code-block-wrapper pre) {
+  margin: 0;
+  border-radius: 0;
+  border: none;
+}
+
+.message-text :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: var(--spacing-sm) 0;
+}
+
+.message-text :deep(th),
+.message-text :deep(td) {
+  border: 1px solid var(--border-light);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.message-text :deep(th) {
+  background: var(--bg-tertiary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.message-text :deep(blockquote) {
+  border-left: 3px solid var(--color-primary);
+  margin: var(--spacing-sm) 0;
+  padding-left: var(--spacing-md);
+  color: var(--text-secondary);
+}
+
+.message-text :deep(ul),
+.message-text :deep(ol) {
+  padding-left: var(--spacing-lg);
+  margin: var(--spacing-xs) 0;
+}
+
+.message-text :deep(li) {
+  margin-bottom: 4px;
+}
+
+.message-text :deep(h1),
+.message-text :deep(h2),
+.message-text :deep(h3),
+.message-text :deep(h4) {
+  margin-top: var(--spacing-md);
+  margin-bottom: var(--spacing-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.message-text :deep(h1) { font-size: 1.4em; }
+.message-text :deep(h2) { font-size: 1.25em; }
+.message-text :deep(h3) { font-size: 1.1em; }
+
+.message-text :deep(a) {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+
+.message-text :deep(hr) {
+  border: none;
+  border-top: 1px solid var(--border-light);
+  margin: var(--spacing-md) 0;
+}
+
+/* 源码模式 */
+.message-text.raw-mode {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-sm);
+}
+
+.message-text.raw-mode .raw-markdown {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Courier New', monospace;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  margin: 0;
+  background: none;
+  padding: 0;
+}
+
+/* Markdown 切换按钮 */
+.md-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--spacing-xs);
+  padding: 2px 10px;
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.md-toggle-btn:hover {
+  background: var(--bg-hover);
+  color: var(--color-primary);
+  border-color: var(--color-primary);
 }
 
 /* === 文件生成按钮 === */

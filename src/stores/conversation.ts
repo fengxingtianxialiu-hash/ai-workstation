@@ -29,6 +29,7 @@ export const useConversationStore = defineStore('conversation', () => {
   async function createConversation(config: {
     title?: string;
     agentId?: string;
+    crewId?: string;
     modelId?: string;
   }): Promise<Conversation> {
     const now = Date.now();
@@ -36,6 +37,7 @@ export const useConversationStore = defineStore('conversation', () => {
       id: `conv_${now}_${Math.random().toString(36).slice(2, 8)}`,
       title: config.title || '新对话',
       agentId: config.agentId,
+      crewId: config.crewId,
       modelId: config.modelId,
       createdAt: now,
       updatedAt: now,
