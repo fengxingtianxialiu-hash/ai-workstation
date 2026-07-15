@@ -31,8 +31,16 @@ export interface StreamCallbacks {
   onError: (error: Error) => void;
 }
 
-/** CF Worker 代理地址 */
-const PROXY_URL = import.meta.env.VITE_PROXY_URL || 'https://ai-workstation-proxy.maynico.workers.dev/proxy';
+/** 获取代理地址：优先使用环境变量，开发模式下自动适配当前主机地址 */
+function getProxyUrl(): string {
+  const envUrl = import.meta.env.VITE_PROXY_URL;
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) return envUrl.trim();
+  // 开发模式：用当前页面主机名 + 3001 端口，兼容手机局域网访问
+  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+  return `http://${host}:3001/proxy`;
+}
+
+const PROXY_URL = getProxyUrl();
 
 /** 本地搜索代理地址 */
 const SEARCH_URL = PROXY_URL.replace('/proxy', '/search');

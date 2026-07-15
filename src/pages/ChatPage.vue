@@ -85,7 +85,7 @@
 
         <div v-for="msg in messages" :key="msg.id" class="message" :class="msg.role">
           <div class="message-avatar">
-            {{ msg.role === 'user' ? '' : '' }}
+            {{ msg.role === 'user' ? '' : (currentAgent?.avatar || '🤖') }}
           </div>
           <div class="message-content">
             <div class="message-bubble">
@@ -125,6 +125,45 @@
               </div>
               <!-- 正文内容 -->
               <div class="message-text" v-html="formatMessage(msg.content)"></div>
+              <!-- 协作结果详情 -->
+              <div v-if="msg.crewResult" class="crew-result-section">
+                <button class="crew-result-toggle" @click="toggleCrewResult(msg.id)">
+                  {{ expandedCrewResultIds.has(msg.id) ? '▼' : '▶' }} 协作详情（{{ msg.crewResult.steps.length }} 步）
+                </button>
+                <div v-show="expandedCrewResultIds.has(msg.id)" class="crew-result-details">
+                  <div v-for="(step, idx) in msg.crewResult.steps" :key="idx" class="crew-result-step">
+                    <div class="crew-result-step-header">
+                      <span class="crew-result-step-title">
+                        {{ step.status === 'completed' ? '✅' : '' }} 步骤 {{ idx + 1 }}: {{ getAgentName(step.agentId) }}
+                      </span>
+                      <button
+                        v-if="step.output && step.status === 'completed'"
+                        class="crew-step-download-btn"
+                        @click.stop="downloadStepFile(msg.id, idx, 'word')"
+                        title="下载为 Word 文档"
+                      >
+                        📄 下载
+                      </button>
+                    </div>
+                    <div v-if="step.output" class="crew-result-step-output-wrapper">
+                      <div
+                        class="crew-result-step-output"
+                        :class="{ collapsed: !expandedStepIds.has(`${msg.id}-${idx}`) }"
+                      >
+                        <div class="crew-result-step-output-text" v-html="formatMessage(step.output)"></div>
+                      </div>
+                      <button
+                        v-if="step.output.length > 300"
+                        class="crew-result-expand-btn"
+                        @click="toggleStepExpand(msg.id, idx)"
+                      >
+                        {{ expandedStepIds.has(`${msg.id}-${idx}`) ? '收起' : '展开全文' }}
+                      </button>
+                    </div>
+                    <div v-if="step.error" class="crew-result-step-error">{{ step.error }}</div>
+                  </div>
+                </div>
+              </div>
               <!-- 文件生成下载按钮 -->
               <div v-if="msg.role === 'assistant' && msg.content" class="file-gen-section">
                 <div class="file-gen-dropdown" :class="{ open: getFileGenInfo(msg.id).showMenu }">
@@ -160,8 +199,8 @@
         </div>
 
         <!-- 流式输出中的 AI 消息 -->
-        <div v-if="streamingContent || streamingThinking" class="message assistant">
-          <div class="message-avatar">🤖</div>
+        <div v-if="(streamingContent || streamingThinking) && !crewExecuting" class="message assistant">
+          <div class="message-avatar">{{ currentAgent?.avatar || '🤖' }}</div>
           <div class="message-content">
             <div class="message-bubble">
               <!-- 思考过程 -->
@@ -186,8 +225,8 @@
         </div>
 
         <!-- 加载中（非流式） -->
-        <div v-if="isLoading && !streamingContent" class="message assistant">
-          <div class="message-avatar">🤖</div>
+        <div v-if="isLoading && !streamingContent && !crewExecuting" class="message assistant">
+          <div class="message-avatar">{{ currentAgent?.avatar || '🤖' }}</div>
           <div class="message-content">
             <div class="message-bubble loading">
               <div class="loading-dots">
@@ -196,6 +235,17 @@
                 <span></span>
               </div>
             </div>
+          </div>
+        </div>
+        <!-- 协作执行进度 -->
+        <div v-if="crewExecuting && crewSteps.length > 0" class="crew-progress-panel">
+          <div class="crew-progress-header">
+            <span class="crew-progress-spinner"></span>
+            <span>协作执行中...</span>
+          </div>
+          <div v-for="(step, idx) in crewSteps" :key="idx" class="crew-step-item" :class="step.status">
+            <span class="crew-step-status">{{ step.status === 'completed' ? '✅' : step.status === 'running' ? '🔄' : step.status === 'failed' ? '❌' : '⏳' }}</span>
+            <span class="crew-step-name">{{ getAgentName(step.agentId) }}</span>
           </div>
         </div>
       </div>
@@ -223,17 +273,79 @@
       <!-- 输入区域 -->
       <div class="input-area">
         <!-- 无模型提示 -->
-        <div v-if="!modelStore.defaultModel" class="no-model-hint">
+        <div v-if="!activeModel" class="no-model-hint">
           ⚠️ 请先在「设置」中配置模型
           <button class="btn-link" @click="$router.push('/settings')">去配置</button>
         </div>
 
         <div class="input-toolbar">
+          <!-- 协作选择器 -->
+          <div class="crew-picker">
+            <button class="tool-btn" :class="{ active: currentCrew }" @click="crewPickerOpen = !crewPickerOpen">
+              <span class="tool-icon">{{ currentCrew ? '👥' : '🤝' }}</span>
+              <span class="tool-label">{{ currentCrew?.name || '协作' }}</span>
+            </button>
+            <div v-if="crewPickerOpen" class="crew-picker-backdrop" @click="crewPickerOpen = false"></div>
+            <div v-if="crewPickerOpen" class="crew-picker-dropdown">
+              <div class="crew-picker-item" :class="{ active: !selectedCrewId }" @click="clearCrew">
+                💬 默认对话
+              </div>
+              <div v-if="pipelineCrews.length" class="crew-picker-group">流水线</div>
+              <div v-for="crew in pipelineCrews" :key="crew.id" class="crew-picker-item" :class="{ active: selectedCrewId === crew.id }" @click="selectCrew(crew.id)">
+                🔄 {{ crew.name }}
+              </div>
+              <div v-if="commanderCrews.length" class="crew-picker-group">主从模式</div>
+              <div v-for="crew in commanderCrews" :key="crew.id" class="crew-picker-item" :class="{ active: selectedCrewId === crew.id }" @click="selectCrew(crew.id)">
+                👑 {{ crew.name }}
+              </div>
+            </div>
+          </div>
+          <!-- Agent 选择器 -->
+          <div v-if="!currentCrew" class="agent-picker">
+            <button
+              class="tool-btn"
+              :class="{ active: currentAgent }"
+              @click="agentPickerOpen = !agentPickerOpen"
+              :title="currentAgent ? `当前 Agent：${currentAgent.name}` : '选择 Agent'"
+            >
+              <span class="tool-icon">{{ currentAgent?.avatar || '🤖' }}</span>
+              <span class="tool-label">{{ currentAgent?.name || 'Agent' }}</span>
+            </button>
+            <div v-if="agentPickerOpen" class="agent-picker-backdrop" @click="agentPickerOpen = false"></div>
+            <div v-if="agentPickerOpen" class="agent-picker-dropdown">
+              <div class="agent-picker-header">选择 Agent</div>
+              <div
+                class="agent-picker-item"
+                :class="{ active: !selectedAgentId }"
+                @click="clearAgent"
+              >
+                <span class="agent-picker-avatar">💬</span>
+                <span class="agent-picker-name">默认（不使用 Agent）</span>
+              </div>
+              <div
+                v-for="agent in agentStore.agents"
+                :key="agent.id"
+                class="agent-picker-item"
+                :class="{ active: selectedAgentId === agent.id }"
+                @click="selectAgent(agent.id)"
+              >
+                <span class="agent-picker-avatar">{{ agent.avatar || '🤖' }}</span>
+                <div class="agent-picker-info">
+                  <span class="agent-picker-name">{{ agent.name }}</span>
+                  <span class="agent-picker-role">{{ agent.role }}</span>
+                </div>
+              </div>
+              <div v-if="agentStore.agents.length === 0" class="agent-picker-empty">
+                暂无 Agent，请先在 Agent 管理中创建
+              </div>
+            </div>
+          </div>
           <button
             class="tool-btn"
             :class="{ active: webSearchEnabled }"
+            :disabled="!!currentCrew"
             @click="webSearchEnabled = !webSearchEnabled"
-            :title="webSearchEnabled ? '关闭联网搜索' : '开启联网搜索'"
+            :title="currentCrew ? '协作模式下不可用' : (webSearchEnabled ? '关闭联网搜索' : '开启联网搜索')"
           >
             <span class="tool-icon">🌐</span>
             <span class="tool-label">联网</span>
@@ -241,8 +353,9 @@
           <button
             class="tool-btn"
             :class="{ active: imageGenEnabled }"
+            :disabled="!!currentCrew"
             @click="imageGenEnabled = !imageGenEnabled"
-            :title="imageGenEnabled ? '关闭图片生成' : '开启图片生成'"
+            :title="currentCrew ? '协作模式下不可用' : (imageGenEnabled ? '关闭图片生成' : '开启图片生成')"
           >
             <span class="tool-icon">🎨</span>
             <span class="tool-label">画图</span>
@@ -270,7 +383,7 @@
             @input="autoResize"
           ></textarea>
           <button
-            v-if="!isLoading"
+            v-if="!isLoading && !crewExecuting"
             class="send-btn"
             :disabled="!canSend"
             @click="sendMessage"
@@ -278,11 +391,11 @@
             发送
           </button>
           <button
-            v-else
+            v-if="isLoading || crewExecuting"
             class="stop-btn"
             @click="stopGeneration"
           >
-            停止
+            {{ crewExecuting ? '停止协作' : '停止' }}
           </button>
         </div>
       </div>
@@ -295,15 +408,223 @@ import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { useConversationStore } from '@/stores/conversation';
 import { useModelStore } from '@/stores/model';
+import { useAgentStore } from '@/stores/agent';
+import { useCrewStore } from '@/stores/crew';
+import { executePipeline, executeCommander, preCheckCrew } from '@/utils/crew-executor';
 import { sendChatStream, webSearch, rewriteQuery, generateImage, type ChatMessage, type MessageContent, type SearchResult } from '@/utils/api-client';
 import { compressImage, validateImage } from '@/utils/image-compressor';
 import { generateWord, generatePPT, generateExcel, downloadBlob } from '@/utils/file-generator';
 import { showToast } from '@/components/Toast';
 import html2canvas from 'html2canvas';
+import type { Agent, ModelConfig, Crew, CrewResult } from '@/types/model';
 
 const router = useRouter();
 const conversationStore = useConversationStore();
 const modelStore = useModelStore();
+const agentStore = useAgentStore();
+const crewStore = useCrewStore();
+
+/** 当前选中的 Agent ID（空字符串表示不使用 Agent） */
+const selectedAgentId = ref<string>('');
+/** Agent 选择器是否展开 */
+const agentPickerOpen = ref(false);
+
+/** 当前选中的 Crew ID */
+const selectedCrewId = ref<string>('');
+/** Crew 选择器是否展开 */
+const crewPickerOpen = ref(false);
+/** 是否正在执行协作 */
+const crewExecuting = ref(false);
+/** 协作执行步骤进度 */
+const crewSteps = ref<any[]>([]);
+/** 展开的协作结果 ID 集合 */
+const expandedCrewResultIds = ref<Set<string>>(new Set());
+/** 展开的步骤 ID 集合（msgId-stepIdx） */
+const expandedStepIds = ref<Set<string>>(new Set());
+
+/** 当前选中的 Crew 对象 */
+const currentCrew = computed<Crew | null>(() =>
+  selectedCrewId.value ? crewStore.getCrew(selectedCrewId.value) || null : null
+);
+
+/** 流水线模式的 Crew 列表 */
+const pipelineCrews = computed(() => crewStore.crews.filter(c => c.mode === 'pipeline'));
+
+/** 主从模式的 Crew 列表 */
+const commanderCrews = computed(() => crewStore.crews.filter(c => c.mode === 'commander'));
+
+/** 当前选中的 Agent 对象 */
+const currentAgent = computed<Agent | null>(() =>
+  selectedAgentId.value ? agentStore.getAgent(selectedAgentId.value) || null : null
+);
+
+/** 当前对话使用的模型：Agent 绑定模型 > 全局默认模型 */
+const activeModel = computed<ModelConfig | null>(() => {
+  if (currentAgent.value?.model) {
+    const bound = modelStore.models.find(m => m.id === currentAgent.value!.model);
+    if (bound) return bound;
+  }
+  return modelStore.defaultModel;
+});
+
+/** 选择 Agent */
+function selectAgent(agentId: string) {
+  selectedAgentId.value = agentId;
+  agentPickerOpen.value = false;
+}
+
+/** 清除 Agent 选择 */
+function clearAgent() {
+  selectedAgentId.value = '';
+  agentPickerOpen.value = false;
+}
+
+/** 获取 Agent 名称 */
+function getAgentName(agentId: string): string {
+  const agent = agentStore.agents.find(a => a.id === agentId);
+  return agent?.name || `Agent(${agentId.slice(0, 6)})`;
+}
+
+/** 选择 Crew */
+function selectCrew(crewId: string) {
+  selectedCrewId.value = crewId;
+  crewPickerOpen.value = false;
+  webSearchEnabled.value = false;
+  imageGenEnabled.value = false;
+}
+
+/** 清除 Crew 选择 */
+function clearCrew() {
+  selectedCrewId.value = '';
+  crewPickerOpen.value = false;
+}
+
+/** 切换协作结果展开/折叠 */
+function toggleCrewResult(msgId: string) {
+  const newSet = new Set(expandedCrewResultIds.value);
+  if (newSet.has(msgId)) {
+    newSet.delete(msgId);
+  } else {
+    newSet.add(msgId);
+  }
+  expandedCrewResultIds.value = newSet;
+}
+
+/** 切换步骤展开/折叠 */
+function toggleStepExpand(msgId: string, stepIdx: number) {
+  const key = `${msgId}-${stepIdx}`;
+  const newSet = new Set(expandedStepIds.value);
+  if (newSet.has(key)) {
+    newSet.delete(key);
+  } else {
+    newSet.add(key);
+  }
+  expandedStepIds.value = newSet;
+}
+
+/** 下载单个步骤的输出为 Word 文档 */
+async function downloadStepFile(msgId: string, stepIdx: number, type: 'word'): Promise<void> {
+  const msg = messages.value.find(m => m.id === msgId);
+  if (!msg?.crewResult) return;
+  const step = msg.crewResult.steps[stepIdx];
+  if (!step?.output) return;
+
+  const agentName = getAgentName(step.agentId);
+  const docStructure = parseMarkdownToDocStructure(step.output);
+  if (!docStructure.title) {
+    docStructure.title = `${agentName} - 步骤 ${stepIdx + 1}`;
+  }
+
+  try {
+    const blob = await generateWord(docStructure as any);
+    const filename = `${docStructure.title}.docx`;
+    downloadBlob(blob, filename);
+    showToast('步骤文档已下载', 'success');
+  } catch (error: any) {
+    showToast('文档生成失败: ' + (error.message || '未知错误'), 'error');
+  }
+}
+
+/** 执行协作流程 */
+async function executeCrew(userInput: string) {
+  const crew = currentCrew.value;
+  if (!crew) return;
+
+  // 预检查
+  const check = preCheckCrew(crew, agentStore.agents, modelStore.models);
+  if (!check.ok) {
+    showToast(check.errors.join('\n'), 'error');
+    return;
+  }
+
+  // 创建对话
+  if (!conversationStore.currentConversationId) {
+    await conversationStore.createConversation({
+      title: `${crew.name}: ${userInput.slice(0, 15)}`,
+      crewId: crew.id,
+    });
+  }
+
+  // 添加用户消息
+  const convId = conversationStore.currentConversationId;
+  await conversationStore.addMessage({ conversationId: convId, role: 'user', content: userInput });
+  refreshMessages();
+
+  crewExecuting.value = true;
+  crewSteps.value = crew.mode === 'pipeline'
+    ? crew.agents.map(agentId => ({ agentId, status: 'pending' }))
+    : [];
+
+  abortController.value = new AbortController();
+
+  try {
+    const result = crew.mode === 'pipeline'
+      ? await executePipeline(crew, userInput, agentStore.agents, modelStore.models, modelStore.defaultModel, {
+          onStepStart: (idx, _agent) => { crewSteps.value[idx] = { ...crewSteps.value[idx], status: 'running' }; scrollToBottom(); },
+          onStepComplete: (idx, output) => { crewSteps.value[idx] = { ...crewSteps.value[idx], status: 'completed', output }; scrollToBottom(); },
+          onStepError: (idx, error) => { crewSteps.value[idx] = { ...crewSteps.value[idx], status: 'failed', error }; },
+        }, abortController.value.signal)
+      : await executeCommander(crew, userInput, agentStore.agents, modelStore.models, modelStore.defaultModel, {
+          onStepStart: (idx, _agent) => {
+            if (crewSteps.value[idx]) {
+              crewSteps.value[idx] = { ...crewSteps.value[idx], status: 'running' };
+            } else {
+              crewSteps.value.push({ agentId: _agent.id, status: 'running' });
+            }
+            scrollToBottom();
+          },
+          onStepComplete: (idx, output) => { crewSteps.value[idx] = { ...crewSteps.value[idx], status: 'completed', output }; scrollToBottom(); },
+          onStepError: (idx, error) => { crewSteps.value[idx] = { ...crewSteps.value[idx], status: 'failed', error }; },
+        }, abortController.value.signal);
+
+    // 保存结果
+    await conversationStore.addMessage({
+      conversationId: convId,
+      role: 'assistant',
+      content: result.finalOutput,
+      crewResult: result,
+    });
+
+    // 更新标题
+    const conv = conversationStore.conversations.find(c => c.id === convId);
+    if (conv && conv.title === '新对话') {
+      conv.title = `${crew.name}: ${userInput.slice(0, 15)}`;
+    }
+
+    refreshMessages();
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      showToast('已停止协作执行', 'info');
+    } else {
+      showToast('协作执行失败: ' + (error.message || '未知错误'), 'error');
+    }
+  } finally {
+    crewExecuting.value = false;
+    crewSteps.value = [];
+    abortController.value = null;
+    scrollToBottom();
+  }
+}
 
 const messages = ref<any[]>([]);
 const inputText = ref('');
@@ -724,10 +1045,14 @@ function formatConvTime(timestamp: number): string {
 }
 
 async function createNewConversation() {
-  await conversationStore.createConversation({ title: '新对话' });
+  await conversationStore.createConversation({
+    title: '新对话',
+    agentId: selectedAgentId.value || undefined,
+  });
   messages.value = [];
   inputText.value = '';
   pendingImages.value = [];
+  selectedCrewId.value = '';
   sidebarOpen.value = false;
   // 滚动到页面顶部
   nextTick(() => {
@@ -741,6 +1066,10 @@ async function createNewConversation() {
 
 async function switchConversation(id: string) {
   await conversationStore.switchConversation(id);
+  // 恢复该会话绑定的 Agent 和 Crew
+  const conv = conversationStore.currentConversation;
+  selectedAgentId.value = conv?.agentId || '';
+  selectedCrewId.value = conv?.crewId || '';
   refreshMessages();
   scrollToBottom();
   sidebarOpen.value = false;
@@ -793,10 +1122,20 @@ function removePendingImage(idx: number) {
 async function sendMessage() {
   if (!canSend.value) return;
 
-  // 检查模型配置
-  const model = modelStore.defaultModel;
+  // 检查模型配置（优先使用 Agent 绑定模型）
+  const model = activeModel.value;
   if (!model) {
     showToast('请先在设置中配置模型', 'error');
+    return;
+  }
+
+  const text = inputText.value.trim();
+
+  // 如果选中了 Crew，走协作执行流程
+  if (currentCrew.value) {
+    inputText.value = '';
+    pendingImages.value = [];
+    await executeCrew(text);
     return;
   }
 
@@ -811,14 +1150,16 @@ async function sendMessage() {
     }
   }
 
-  const text = inputText.value.trim();
   const images = [...pendingImages.value];
   inputText.value = '';
   pendingImages.value = [];
 
   // 如果没有当前会话，创建一个
   if (!conversationStore.currentConversationId) {
-    await conversationStore.createConversation({ title: text.slice(0, 20) || '新对话' });
+    await conversationStore.createConversation({
+      title: text.slice(0, 20) || '新对话',
+      agentId: selectedAgentId.value || undefined,
+    });
   }
 
   const convId = conversationStore.currentConversationId;
@@ -929,7 +1270,7 @@ async function sendMessage() {
   }
 
   // 构建完整的消息历史（过滤掉空内容的 assistant 消息）
-  const chatMessages: ChatMessage[] = messages.value
+  let chatMessages: ChatMessage[] = messages.value
     .filter(m => m.role === 'user' || (m.role === 'assistant' && m.content))
     .map(m => {
       if (m.images && m.images.length > 0) {
@@ -943,6 +1284,14 @@ async function sendMessage() {
       }
       return { role: m.role, content: m.content };
     });
+
+  // 如果选中了 Agent 且有系统提示词，注入到消息列表最前面
+  if (currentAgent.value?.systemPrompt) {
+    chatMessages = [
+      { role: 'system', content: currentAgent.value.systemPrompt },
+      ...chatMessages,
+    ];
+  }
 
   // 如果有搜索结果，注入到最后一条用户消息中（兼容所有 API 格式）
   if (searchContext && chatMessages.length > 0) {
@@ -1059,11 +1408,17 @@ onMounted(async () => {
   }
   scrollToBottom();
 
-  // 点击外部关闭文件生成菜单
+  // 点击外部关闭文件生成菜单和 Agent 选择器
   document.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
     if (!target.closest('.file-gen-dropdown')) {
       closeAllFileGenMenus();
+    }
+    if (!target.closest('.agent-picker')) {
+      agentPickerOpen.value = false;
+    }
+    if (!target.closest('.crew-picker')) {
+      crewPickerOpen.value = false;
     }
   });
 });
@@ -1739,8 +2094,359 @@ onMounted(async () => {
   color: var(--color-primary);
 }
 
+/* === Agent 选择器 === */
+.agent-picker {
+  position: relative;
+  display: inline-block;
+}
+
+.agent-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+}
+
+.agent-picker-dropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 6px;
+  min-width: 220px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  padding: var(--spacing-sm);
+}
+
+.agent-picker-header {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: var(--spacing-xs);
+}
+
+.agent-picker-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.agent-picker-item:hover {
+  background: var(--bg-hover);
+}
+
+.agent-picker-item.active {
+  background: var(--color-primary-bg);
+}
+
+.agent-picker-avatar {
+  font-size: var(--font-size-lg);
+  flex-shrink: 0;
+}
+
+.agent-picker-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.agent-picker-name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-picker-role {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-picker-empty {
+  padding: var(--spacing-md);
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+}
+
 .tool-icon {
   font-size: var(--font-size-base);
+}
+
+.tool-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* === Crew 选择器 === */
+.crew-picker {
+  position: relative;
+  display: inline-block;
+}
+
+.crew-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+}
+
+.crew-picker-dropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 6px;
+  min-width: 200px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  padding: var(--spacing-sm);
+}
+
+.crew-picker-group {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: var(--spacing-xs);
+}
+
+.crew-picker-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+}
+
+.crew-picker-item:hover {
+  background: var(--bg-hover);
+}
+
+.crew-picker-item.active {
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+}
+
+/* === 协作执行进度 === */
+.crew-progress-panel {
+  margin: var(--spacing-md) 0;
+  padding: var(--spacing-md);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+}
+
+.crew-progress-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-primary);
+  margin-bottom: var(--spacing-sm);
+}
+
+.crew-progress-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-primary);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.crew-step-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--font-size-sm);
+  border-radius: var(--radius-sm);
+  margin-bottom: 2px;
+}
+
+.crew-step-item.completed {
+  color: var(--text-secondary);
+}
+
+.crew-step-item.running {
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+}
+
+.crew-step-item.failed {
+  color: var(--color-error);
+}
+
+.crew-step-status {
+  flex-shrink: 0;
+}
+
+.crew-step-name {
+  font-weight: var(--font-weight-medium);
+}
+
+/* === 协作结果展示 === */
+.crew-result-section {
+  margin-top: var(--spacing-sm);
+  padding-top: var(--spacing-sm);
+  border-top: 1px solid var(--border-light);
+}
+
+.crew-result-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: var(--bg-tertiary);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+  width: 100%;
+  text-align: left;
+}
+
+.crew-result-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.crew-result-details {
+  margin-top: var(--spacing-xs);
+  padding: var(--spacing-sm);
+  background: rgba(147, 197, 253, 0.05);
+  border-radius: var(--radius-sm);
+}
+
+.crew-result-step {
+  margin-bottom: var(--spacing-sm);
+  border-bottom: 1px dashed var(--border-light);
+  padding-bottom: var(--spacing-sm);
+}
+
+.crew-result-step:last-child {
+  margin-bottom: 0;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.crew-result-step-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-xs);
+}
+
+.crew-result-step-title {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-secondary);
+}
+
+.crew-step-download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.crew-step-download-btn:hover {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.crew-result-step-output-wrapper {
+  position: relative;
+}
+
+.crew-result-step-output {
+  font-size: var(--font-size-xs);
+  color: var(--text-primary);
+  line-height: var(--line-height-normal);
+  padding-left: var(--spacing-md);
+  word-break: break-word;
+}
+
+.crew-result-step-output.collapsed {
+  max-height: 120px;
+  overflow: hidden;
+  position: relative;
+}
+
+.crew-result-step-output.collapsed::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: var(--spacing-md);
+  right: 0;
+  height: 40px;
+  background: linear-gradient(transparent, rgba(240, 240, 245, 0.9));
+}
+
+.crew-result-step-output-text {
+  white-space: pre-wrap;
+}
+
+.crew-result-expand-btn {
+  display: block;
+  margin-left: var(--spacing-md);
+  margin-top: 4px;
+  padding: 2px 8px;
+  background: none;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  color: var(--color-primary);
+  transition: all var(--transition-fast);
+}
+
+.crew-result-expand-btn:hover {
+  background: var(--color-primary-bg);
+}
+
+.crew-result-step-error {
+  font-size: var(--font-size-xs);
+  color: var(--color-error);
+  padding-left: var(--spacing-md);
 }
 
 /* === 联网搜索状态 === */
@@ -2114,6 +2820,28 @@ onMounted(async () => {
     position: fixed;
     inset: 0;
     z-index: 199;
+  }
+
+  /* Crew 选择器移动端 */
+  .crew-picker-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 199;
+  }
+
+  .crew-picker-dropdown {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: auto;
+    margin-bottom: 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    z-index: 200;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    max-height: 50vh;
   }
 
   .file-gen-menu {

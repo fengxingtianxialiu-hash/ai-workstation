@@ -14,6 +14,7 @@ export interface BackupData {
   agents: any[];
   prompts: any[];
   models: any[];
+  crews: any[];
   settings: Record<string, any>;
   conversations?: any[];
   messages?: any[];
@@ -24,6 +25,7 @@ const STORAGE_KEYS = [
   'app-agents',
   'app-prompts',
   'app-models',
+  'app-crews',
   'app-default-model',
   'app-theme',
 ];
@@ -38,6 +40,7 @@ export async function exportAllData(includeConversations: boolean = false): Prom
     agents: storage.get('app-agents') || [],
     prompts: storage.get('app-prompts') || [],
     models: storage.get('app-models') || [],
+    crews: storage.get('app-crews') || [],
     settings: {},
   };
 
@@ -100,6 +103,13 @@ export async function importBackup(file: File): Promise<{ success: boolean; mess
     const existingModels = storage.get<any[]>('app-models') || [];
     const mergedModels = mergeById(existingModels, data.models);
     storage.set('app-models', mergedModels);
+
+    // 合并 crews
+    if (data.crews) {
+      const existingCrews = storage.get<any[]>('app-crews') || [];
+      const mergedCrews = mergeById(existingCrews, data.crews);
+      storage.set('app-crews', mergedCrews);
+    }
 
     // 恢复设置
     if (data.settings) {

@@ -53,12 +53,56 @@ export interface Prompt {
 }
 
 /**
+ * 协作团队类型定义
+ */
+export interface Crew {
+  id: string;
+  name: string;
+  description?: string;
+  /** 协作模式：pipeline（流水线）| commander（主从） */
+  mode: 'pipeline' | 'commander';
+  /** 参与的 Agent ID 列表（按顺序） */
+  agents: string[];
+  /** 指挥官 Agent ID（仅 commander 模式） */
+  commanderId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * 协作执行单步记录
+ */
+export interface CrewStep {
+  agentId: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  input?: string;
+  output?: string;
+  error?: string;
+}
+
+/**
+ * 协作执行结果
+ */
+export interface CrewResult {
+  /** 各步骤执行记录 */
+  steps: CrewStep[];
+  /** 最终输出内容 */
+  finalOutput: string;
+  /** 执行模式 */
+  mode: 'pipeline' | 'commander';
+  /** 拆解计划（仅 commander 模式） */
+  plan?: string;
+}
+
+/**
  * 对话会话
  */
 export interface Conversation {
   id: string;
   title: string;
   agentId?: string;
+  /** 关联的协作团队 ID */
+  crewId?: string;
   /** 会话临时覆盖的模型 ID */
   modelId?: string;
   createdAt: number;
@@ -81,6 +125,8 @@ export interface Message {
   files?: GeneratedFile[];
   /** 生成的图片 */
   generatedImages?: string[];
+  /** 协作执行结果 */
+  crewResult?: CrewResult;
   timestamp?: number;
   createdAt?: number;
 }
