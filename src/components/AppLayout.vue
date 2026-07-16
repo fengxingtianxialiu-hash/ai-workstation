@@ -56,6 +56,7 @@ const themeStore = useThemeStore();
 const navItems = [
   { path: '/chat', label: '对话', icon: '💬' },
   { path: '/agents', label: 'Agent', icon: '🤖' },
+  { path: '/knowledge', label: '知识库', icon: '📚' },
   { path: '/prompts', label: '提示词', icon: '📝' },
   { path: '/settings', label: '设置', icon: '⚙️' },
 ];

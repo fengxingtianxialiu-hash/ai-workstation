@@ -176,6 +176,27 @@
                   </div>
                 </div>
               </div>
+              <!-- 知识库来源 -->
+              <div v-if="msg.knowledgeSources && msg.knowledgeSources.length > 0" class="knowledge-source-section">
+                <button class="knowledge-source-toggle" @click="toggleKnowledgeSource(msg.id)">
+                  {{ expandedKnowledgeSourceIds.has(msg.id) ? '▼' : '▶' }}  知识库来源（{{ msg.knowledgeSources.length }}）
+                </button>
+                <div v-show="expandedKnowledgeSourceIds.has(msg.id)" class="knowledge-source-list">
+                  <div v-for="(source, idx) in msg.knowledgeSources" :key="idx" class="knowledge-source-item">
+                    <div class="knowledge-source-header">
+                      <span class="knowledge-source-icon"></span>
+                      <span class="knowledge-source-title">{{ source.sectionTitle }}</span>
+                    </div>
+                    <div class="knowledge-source-meta">
+                      {{ source.knowledgeBaseName }} · {{ source.documentTitle }}
+                    </div>
+                    <div class="knowledge-source-actions">
+                      <button class="kb-source-btn" @click="viewOriginal(source.chunkId)">查看原文</button>
+                      <button class="kb-source-btn" @click="downloadKnowledgeChunk(source.chunkId)">下载</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <!-- 文件生成下载按钮 -->
               <div v-if="msg.role === 'assistant' && msg.content" class="file-gen-section">
                 <div class="file-gen-dropdown" :class="{ open: getFileGenInfo(msg.id).showMenu }">
@@ -294,6 +315,17 @@
         </div>
       </div>
 
+      <!-- 知识库检索状态 -->
+      <div v-if="kbSearching" class="search-status-bar kb-searching">
+        <span class="search-spinner"></span>
+        <span> 检索知识库...</span>
+      </div>
+      <div v-if="!kbSearching && kbSearchResults.length > 0" class="search-results-bar kb-results">
+        <div class="search-results-header">
+          <span>📚 参考了 {{ kbSearchResults.length }} 条知识库内容</span>
+        </div>
+      </div>
+
       <!-- 输入区域 -->
       <div class="input-area">
         <!-- 无模型提示 -->
@@ -321,6 +353,34 @@
               <div v-if="commanderCrews.length" class="crew-picker-group">主从模式</div>
               <div v-for="crew in commanderCrews" :key="crew.id" class="crew-picker-item" :class="{ active: selectedCrewId === crew.id }" @click="selectCrew(crew.id)">
                 👑 {{ crew.name }}
+              </div>
+            </div>
+          </div>
+          <!-- 知识库选择器 -->
+          <div class="kb-picker">
+            <button class="tool-btn" :class="{ active: selectedKbIds.length > 0 }" @click="toggleKbPicker" :disabled="!!currentCrew" :title="currentCrew ? '协作模式下不可用' : '选择知识库'">
+              <span class="tool-icon">📚</span>
+              <span class="tool-label">{{ selectedKbIds.length > 0 ? `知识库(${selectedKbIds.length})` : '知识库' }}</span>
+            </button>
+            <div v-if="kbPickerOpen" class="kb-picker-backdrop" @click="kbPickerOpen = false"></div>
+            <div v-if="kbPickerOpen" class="kb-picker-dropdown">
+              <div class="kb-picker-header">选择知识库</div>
+              <div v-if="knowledgeStore.knowledgeBases.length === 0" class="kb-picker-empty">
+                暂无知识库，请先创建
+              </div>
+              <div
+                v-for="kb in knowledgeStore.knowledgeBases"
+                :key="kb.id"
+                class="kb-picker-item"
+                :class="{ active: selectedKbIds.includes(kb.id) }"
+                @click="toggleKb(kb.id)"
+              >
+                <span class="kb-picker-icon">📚</span>
+                <div class="kb-picker-info">
+                  <span class="kb-picker-name">{{ kb.name }}</span>
+                  <span class="kb-picker-stats">{{ kb.documentCount }} 篇 · {{ kb.chunkCount }} 块</span>
+                </div>
+                <span v-if="selectedKbIds.includes(kb.id)" class="kb-picker-check">✓</span>
               </div>
             </div>
           </div>
@@ -424,6 +484,23 @@
         </div>
       </div>
     </div>
+
+    <!-- 原文查看面板 -->
+    <div v-if="originalTextChunk" class="modal-overlay" @click.self="originalTextChunk = null">
+      <div class="modal-dialog modal-large">
+        <div class="modal-header">
+          <h2>{{ originalTextChunk.title }}</h2>
+          <button class="modal-close" @click="originalTextChunk = null">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="original-text-content" v-html="formatMessage(originalTextChunk.content)"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" @click="downloadKnowledgeChunk(originalTextChunk.id)">下载为 Word</button>
+          <button class="btn-secondary" @click="originalTextChunk = null">关闭</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -434,20 +511,23 @@ import { useConversationStore } from '@/stores/conversation';
 import { useModelStore } from '@/stores/model';
 import { useAgentStore } from '@/stores/agent';
 import { useCrewStore } from '@/stores/crew';
+import { useKnowledgeStore } from '@/stores/knowledge';
 import { executePipeline, executeCommander, preCheckCrew } from '@/utils/crew-executor';
+import { searchKnowledge, formatSearchResultsForInjection, clearResultCache } from '@/utils/knowledge-search';
 import { sendChatStream, webSearch, rewriteQuery, generateImage, type ChatMessage, type MessageContent, type SearchResult } from '@/utils/api-client';
 import { compressImage, validateImage } from '@/utils/image-compressor';
 import { generateWord, generatePPT, generateExcel, downloadBlob } from '@/utils/file-generator';
 import { showToast } from '@/components/Toast';
 import html2canvas from 'html2canvas';
 import { marked } from 'marked';
-import type { Agent, ModelConfig, Crew, CrewResult } from '@/types/model';
+import type { Agent, ModelConfig, Crew, CrewResult, KnowledgeSource } from '@/types/model';
 
 const router = useRouter();
 const conversationStore = useConversationStore();
 const modelStore = useModelStore();
 const agentStore = useAgentStore();
 const crewStore = useCrewStore();
+const knowledgeStore = useKnowledgeStore();
 
 /** 当前选中的 Agent ID（空字符串表示不使用 Agent） */
 const selectedAgentId = ref<string>('');
@@ -466,6 +546,21 @@ const crewSteps = ref<any[]>([]);
 const expandedCrewResultIds = ref<Set<string>>(new Set());
 /** 展开的步骤 ID 集合（msgId-stepIdx） */
 const expandedStepIds = ref<Set<string>>(new Set());
+/** 展开的知识库来源 ID 集合 */
+const expandedKnowledgeSourceIds = ref<Set<string>>(new Set());
+
+/** 选中的知识库 ID 列表 */
+const selectedKbIds = ref<string[]>([]);
+/** 知识库选择器是否展开 */
+const kbPickerOpen = ref(false);
+/** 是否正在检索知识库 */
+const kbSearching = ref(false);
+/** 检索到的知识库结果 */
+const kbSearchResults = ref<any[]>([]);
+/** 对话级知识缓存 */
+const kbCache = ref<Map<string, string>>(new Map());
+/** 原文查看面板 */
+const originalTextChunk = ref<any>(null);
 
 /** 当前选中的 Crew 对象 */
 const currentCrew = computed<Crew | null>(() =>
@@ -522,6 +617,136 @@ function selectCrew(crewId: string) {
 function clearCrew() {
   selectedCrewId.value = '';
   crewPickerOpen.value = false;
+}
+
+// ========== 知识库相关 ==========
+
+/** 切换知识库选择器 */
+function toggleKbPicker() {
+  if (currentCrew.value) return;
+  kbPickerOpen.value = !kbPickerOpen.value;
+}
+
+/** 切换知识库选中状态 */
+function toggleKb(kbId: string) {
+  const idx = selectedKbIds.value.indexOf(kbId);
+  if (idx >= 0) {
+    selectedKbIds.value.splice(idx, 1);
+  } else {
+    selectedKbIds.value.push(kbId);
+  }
+  // 清除缓存
+  kbCache.value.clear();
+  kbSearchResults.value = [];
+}
+
+/** 切换知识库来源展开/折叠 */
+function toggleKnowledgeSource(msgId: string) {
+  const newSet = new Set(expandedKnowledgeSourceIds.value);
+  if (newSet.has(msgId)) {
+    newSet.delete(msgId);
+  } else {
+    newSet.add(msgId);
+  }
+  expandedKnowledgeSourceIds.value = newSet;
+}
+
+/** 查看原文 */
+async function viewOriginal(chunkId: string) {
+  const chunk = await knowledgeStore.getChunk(chunkId);
+  if (chunk) {
+    originalTextChunk.value = chunk;
+  }
+}
+
+/** 下载知识库块为 Word */
+async function downloadKnowledgeChunk(chunkId: string) {
+  const chunk = await knowledgeStore.getChunk(chunkId);
+  if (!chunk) return;
+
+  try {
+    const docStructure = parseMarkdownToDocStructure(chunk.content);
+    if (!docStructure.title) {
+      docStructure.title = chunk.title;
+    }
+    const blob = await generateWord(docStructure as any);
+    downloadBlob(blob, `${docStructure.title}.docx`);
+    showToast('文档已下载', 'success');
+  } catch (error: any) {
+    showToast('文档生成失败: ' + (error.message || '未知错误'), 'error');
+  }
+}
+
+/** 执行知识库检索 */
+async function executeKnowledgeSearch(query: string): Promise<{ text: string; sources: KnowledgeSource[] }> {
+  if (selectedKbIds.value.length === 0) return { text: '', sources: [] };
+
+  // 检查缓存
+  if (kbCache.value.has(query)) {
+    return { text: kbCache.value.get(query)!, sources: [] };
+  }
+
+  kbSearching.value = true;
+  kbSearchResults.value = [];
+
+  try {
+    // 加载所有需要的数据
+    const allChunks = new Map<string, any[]>();
+    const allDocuments = new Map<string, any>();
+    const allKnowledgeBases = new Map<string, any>();
+
+    for (const kbId of selectedKbIds.value) {
+      const kb = knowledgeStore.getKnowledgeBase(kbId);
+      if (!kb) continue;
+      allKnowledgeBases.set(kbId, kb);
+
+      const chunks = await knowledgeStore.getChunksByKnowledgeBase(kbId);
+      allChunks.set(kbId, chunks);
+
+      for (const chunk of chunks) {
+        if (!allDocuments.has(chunk.documentId)) {
+          const doc = await knowledgeStore.getDocument(chunk.documentId);
+          if (doc) allDocuments.set(chunk.documentId, doc);
+        }
+      }
+    }
+
+    const results = searchKnowledge(
+      query,
+      selectedKbIds.value,
+      allChunks,
+      allDocuments,
+      allKnowledgeBases,
+      query // cache key
+    );
+
+    kbSearchResults.value = results;
+
+    if (results.length === 0) {
+      kbSearching.value = false;
+      return { text: '', sources: [] };
+    }
+
+    const text = formatSearchResultsForInjection(results);
+    const sources: KnowledgeSource[] = results.map(r => ({
+      chunkId: r.chunk.id,
+      documentId: r.chunk.documentId,
+      documentTitle: r.documentTitle,
+      knowledgeBaseId: r.chunk.knowledgeBaseId,
+      knowledgeBaseName: r.knowledgeBaseName,
+      sectionTitle: r.chunk.title,
+    }));
+
+    // 缓存结果
+    kbCache.value.set(query, text);
+
+    return { text, sources };
+  } catch (error) {
+    console.error('知识库检索失败:', error);
+    return { text: '', sources: [] };
+  } finally {
+    kbSearching.value = false;
+  }
 }
 
 /** 切换协作结果展开/折叠 */
@@ -1340,6 +1565,15 @@ async function sendMessage() {
     }
   }
 
+  // 知识库检索
+  let knowledgeContext = '';
+  let knowledgeSources: KnowledgeSource[] = [];
+  if (selectedKbIds.value.length > 0 && text && !currentCrew.value) {
+    const result = await executeKnowledgeSearch(text);
+    knowledgeContext = result.text;
+    knowledgeSources = result.sources;
+  }
+
   // 构建完整的消息历史（过滤掉空内容的 assistant 消息）
   let chatMessages: ChatMessage[] = messages.value
     .filter(m => m.role === 'user' || (m.role === 'assistant' && m.content))
@@ -1369,6 +1603,21 @@ async function sendMessage() {
     const lastMsg = chatMessages[chatMessages.length - 1];
     if (typeof lastMsg.content === 'string') {
       lastMsg.content = searchContext + '\n\n用户问题：' + lastMsg.content;
+    }
+  }
+
+  // 如果有知识库检索结果，注入到系统提示词或消息列表最前面
+  if (knowledgeContext) {
+    const knowledgeSystemMsg: ChatMessage = {
+      role: 'system',
+      content: '以下是从知识库中检索到的相关信息，请基于这些信息回答用户问题。如果知识库信息与你的知识冲突，优先以知识库信息为准：\n\n' + knowledgeContext,
+    };
+    // 插入到 system 消息之后（如果有 Agent systemPrompt）或最前面
+    const hasSystemPrompt = chatMessages.length > 0 && chatMessages[0].role === 'system';
+    if (hasSystemPrompt) {
+      chatMessages.splice(1, 0, knowledgeSystemMsg);
+    } else {
+      chatMessages.unshift(knowledgeSystemMsg);
     }
   }
 
@@ -1418,6 +1667,7 @@ async function sendMessage() {
       role: 'assistant',
       content: finalContent,
       thinking: finalThinking || undefined,
+      knowledgeSources: knowledgeSources.length > 0 ? knowledgeSources : undefined,
     });
 
     // 更新对话标题（如果是第一条消息）
@@ -3235,5 +3485,286 @@ onMounted(async () => {
     padding: 4px 8px;
     min-height: 32px;
   }
+}
+
+/* === 知识库选择器 === */
+.kb-picker {
+  position: relative;
+  display: inline-block;
+}
+
+.kb-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+}
+
+.kb-picker-dropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 6px;
+  min-width: 260px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  padding: var(--spacing-sm);
+}
+
+.kb-picker-header {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.kb-picker-empty {
+  padding: var(--spacing-md);
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+}
+
+.kb-picker-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.kb-picker-item:hover {
+  background: var(--bg-hover);
+}
+
+.kb-picker-item.active {
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+}
+
+.kb-picker-icon {
+  font-size: var(--font-size-lg);
+}
+
+.kb-picker-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.kb-picker-name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.kb-picker-stats {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+}
+
+.kb-picker-check {
+  color: var(--color-primary);
+  font-weight: var(--font-weight-bold);
+}
+
+/* === 知识库检索状态 === */
+.kb-searching {
+  background: #f0f4ff;
+  color: #4F6EF7;
+}
+
+.kb-results {
+  background: #f0f4ff;
+}
+
+/* === 知识库来源 === */
+.knowledge-source-section {
+  margin-top: var(--spacing-sm);
+  padding-top: var(--spacing-sm);
+  border-top: 1px solid var(--border-light);
+}
+
+.knowledge-source-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: var(--bg-tertiary);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+  width: 100%;
+  text-align: left;
+}
+
+.knowledge-source-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.knowledge-source-list {
+  margin-top: var(--spacing-xs);
+  padding: var(--spacing-sm);
+  background: rgba(79, 110, 247, 0.05);
+  border-radius: var(--radius-sm);
+}
+
+.knowledge-source-item {
+  margin-bottom: var(--spacing-sm);
+  padding-bottom: var(--spacing-sm);
+  border-bottom: 1px dashed var(--border-light);
+}
+
+.knowledge-source-item:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.knowledge-source-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin-bottom: 2px;
+}
+
+.knowledge-source-icon {
+  font-size: var(--font-size-sm);
+}
+
+.knowledge-source-title {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-secondary);
+}
+
+.knowledge-source-meta {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+  margin-bottom: var(--spacing-xs);
+}
+
+.knowledge-source-actions {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.kb-source-btn {
+  padding: 2px 8px;
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  transition: all var(--transition-fast);
+}
+
+.kb-source-btn:hover {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+/* === 原文查看面板 === */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-dialog {
+  background: var(--bg-primary);
+  border-radius: var(--radius-lg);
+  width: 90%;
+  max-width: 700px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.modal-large {
+  max-width: 700px;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.modal-header h2 {
+  font-size: var(--font-size-lg);
+  color: var(--text-primary);
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: var(--font-size-xl);
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.modal-close:hover {
+  background: var(--bg-hover);
+}
+
+.modal-body {
+  padding: var(--spacing-lg);
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-top: 1px solid var(--border-light);
+}
+
+.original-text-content {
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
+.btn-secondary {
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: var(--font-size-base);
+  transition: all var(--transition-fast);
+}
+
+.btn-secondary:hover {
+  background: var(--bg-hover);
 }
 </style>

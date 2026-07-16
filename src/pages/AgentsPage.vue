@@ -46,6 +46,7 @@
               <div class="agent-meta">
                 <span class="meta-item">模型：{{ getModelName(agent.model) }}</span>
                 <span class="meta-item">参与 {{ getCrewCount(agent.id) }} 个团队</span>
+                <span v-if="(agent.knowledgeBaseIds || []).length > 0" class="meta-item">📚 {{ (agent.knowledgeBaseIds || []).length }} 个知识库</span>
               </div>
             </div>
 
@@ -141,11 +142,57 @@
               </option>
             </select>
           </div>
+
+          <div class="form-item">
+            <label class="form-label">
+              绑定知识库
+              <span class="form-hint">（最多 5 个）</span>
+            </label>
+            <div class="kb-binding-list">
+              <div v-for="kbId in agentForm.knowledgeBaseIds" :key="kbId" class="kb-binding-item">
+                <span class="kb-binding-name">{{ getKbName(kbId) }}</span>
+                <button class="kb-binding-remove" @click="removeKbBinding(kbId)">×</button>
+              </div>
+              <button
+                v-if="agentForm.knowledgeBaseIds.length < 5"
+                class="kb-binding-add"
+                @click="showKbPicker = true"
+              >
+                + 添加知识库
+              </button>
+            </div>
+          </div>
         </div>
 
         <div class="dialog-footer">
           <button class="btn btn-secondary" @click="showAgentDialog = false">取消</button>
           <button class="btn btn-primary" @click="saveAgent">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 知识库选择器对话框 -->
+    <div v-if="showKbPicker" class="dialog-mask" @click.self="showKbPicker = false">
+      <div class="dialog">
+        <div class="dialog-header">
+          <h3 class="dialog-title">选择知识库</h3>
+          <button class="dialog-close" @click="showKbPicker = false">×</button>
+        </div>
+        <div class="dialog-body">
+          <div v-if="knowledgeStore.knowledgeBases.length === 0" class="empty-hint">
+            暂无知识库，请先在知识库管理中创建
+          </div>
+          <div v-for="kb in availableKbs" :key="kb.id" class="kb-picker-item" :class="{ selected: agentForm.knowledgeBaseIds.includes(kb.id) }" @click="toggleKbBinding(kb.id)">
+            <span class="kb-picker-icon">📚</span>
+            <div class="kb-picker-info">
+              <span class="kb-picker-name">{{ kb.name }}</span>
+              <span class="kb-picker-stats">{{ kb.documentCount }} 篇文档 · {{ kb.chunkCount }} 个知识块</span>
+            </div>
+            <span v-if="agentForm.knowledgeBaseIds.includes(kb.id)" class="kb-picker-check">✓</span>
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn btn-secondary" @click="showKbPicker = false">完成</button>
         </div>
       </div>
     </div>
@@ -250,22 +297,29 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { useAgentStore } from '@/stores/agent';
 import { useModelStore } from '@/stores/model';
 import { useCrewStore } from '@/stores/crew';
+import { useKnowledgeStore } from '@/stores/knowledge';
 import { showToast } from '@/components/Toast';
 import type { Agent, Crew } from '@/types/model';
 
 const agentStore = useAgentStore();
 const modelStore = useModelStore();
 const crewStore = useCrewStore();
+const knowledgeStore = useKnowledgeStore();
+
+onMounted(async () => {
+  await knowledgeStore.loadKnowledgeBases();
+});
 
 const activeTab = ref<'agents' | 'crews'>('agents');
 
 // === Agent 管理 ===
 const showAgentDialog = ref(false);
 const editingAgent = ref<Agent | null>(null);
+const showKbPicker = ref(false);
 
 const agentForm = reactive({
   name: '',
@@ -274,6 +328,7 @@ const agentForm = reactive({
   description: '',
   systemPrompt: '',
   model: '',
+  knowledgeBaseIds: [] as string[],
 });
 
 function getModelName(modelId?: string): string {
@@ -285,6 +340,32 @@ function getCrewCount(agentId: string): number {
   return crewStore.getCrewsByAgent(agentId).length;
 }
 
+function getKbName(kbId: string): string {
+  return knowledgeStore.getKnowledgeBase(kbId)?.name || '未知知识库';
+}
+
+const availableKbs = computed(() => knowledgeStore.knowledgeBases);
+
+function toggleKbBinding(kbId: string) {
+  const idx = agentForm.knowledgeBaseIds.indexOf(kbId);
+  if (idx >= 0) {
+    agentForm.knowledgeBaseIds.splice(idx, 1);
+  } else {
+    if (agentForm.knowledgeBaseIds.length >= 5) {
+      showToast('最多绑定 5 个知识库', 'error');
+      return;
+    }
+    agentForm.knowledgeBaseIds.push(kbId);
+  }
+}
+
+function removeKbBinding(kbId: string) {
+  const idx = agentForm.knowledgeBaseIds.indexOf(kbId);
+  if (idx >= 0) {
+    agentForm.knowledgeBaseIds.splice(idx, 1);
+  }
+}
+
 function editAgent(agent: Agent) {
   editingAgent.value = agent;
   agentForm.name = agent.name;
@@ -293,6 +374,7 @@ function editAgent(agent: Agent) {
   agentForm.description = agent.description || '';
   agentForm.systemPrompt = agent.systemPrompt || '';
   agentForm.model = agent.model || '';
+  agentForm.knowledgeBaseIds = [...(agent.knowledgeBaseIds || [])];
   showAgentDialog.value = true;
 }
 
@@ -310,6 +392,7 @@ async function saveAgent() {
       description: agentForm.description,
       systemPrompt: agentForm.systemPrompt,
       model: agentForm.model,
+      knowledgeBaseIds: agentForm.knowledgeBaseIds,
     });
     showToast('Agent 已更新', 'success');
   } else {
@@ -320,6 +403,7 @@ async function saveAgent() {
       description: agentForm.description,
       systemPrompt: agentForm.systemPrompt,
       model: agentForm.model,
+      knowledgeBaseIds: agentForm.knowledgeBaseIds,
     });
     showToast('Agent 已创建', 'success');
   }
@@ -1025,6 +1109,121 @@ select.form-input {
 .icon-btn.remove-btn:hover {
   background: rgba(239, 68, 68, 0.1);
   color: var(--color-error);
+}
+
+/* === 知识库绑定 === */
+.kb-binding-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-xs);
+  align-items: center;
+}
+
+.kb-binding-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: var(--color-primary-bg);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-primary);
+}
+
+.kb-binding-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-binding-remove {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: var(--font-size-base);
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.kb-binding-remove:hover {
+  color: var(--color-error);
+}
+
+.kb-binding-add {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: var(--bg-tertiary);
+  border: 1px dashed var(--border-light);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.kb-binding-add:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.form-hint {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+  font-weight: var(--font-weight-normal);
+  margin-left: var(--spacing-xs);
+}
+
+/* === 知识库选择器 === */
+.kb-picker-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  margin-bottom: var(--spacing-xs);
+}
+
+.kb-picker-item:hover {
+  background: var(--bg-hover);
+}
+
+.kb-picker-item.selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-bg);
+}
+
+.kb-picker-icon {
+  font-size: var(--font-size-xl);
+}
+
+.kb-picker-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.kb-picker-name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+}
+
+.kb-picker-stats {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+}
+
+.kb-picker-check {
+  color: var(--color-primary);
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-lg);
 }
 
 /* === 移动端适配 === */

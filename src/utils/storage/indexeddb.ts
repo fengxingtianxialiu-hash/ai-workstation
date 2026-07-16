@@ -6,7 +6,7 @@ import { openDB, type IDBPDatabase } from 'idb';
 import type { ILargeStorageAdapter } from './adapter';
 
 const DB_NAME = 'ai-workstation-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 /**
  * 预定义的 object store 名称
@@ -15,6 +15,9 @@ export const STORES = {
   CONVERSATIONS: 'conversations',
   MESSAGES: 'messages',
   IMAGE_CACHE: 'image-cache',
+  KNOWLEDGE_BASES: 'knowledge-bases',
+  KNOWLEDGE_DOCUMENTS: 'knowledge-documents',
+  KNOWLEDGE_CHUNKS: 'knowledge-chunks',
 } as const;
 
 let dbInstance: IDBPDatabase | null = null;
@@ -36,6 +39,21 @@ async function getDB(): Promise<IDBPDatabase> {
       // 图片缓存
       if (!db.objectStoreNames.contains(STORES.IMAGE_CACHE)) {
         db.createObjectStore(STORES.IMAGE_CACHE, { keyPath: 'id' });
+      }
+      // 知识库
+      if (!db.objectStoreNames.contains(STORES.KNOWLEDGE_BASES)) {
+        db.createObjectStore(STORES.KNOWLEDGE_BASES, { keyPath: 'id' });
+      }
+      // 知识库文档
+      if (!db.objectStoreNames.contains(STORES.KNOWLEDGE_DOCUMENTS)) {
+        const docStore = db.createObjectStore(STORES.KNOWLEDGE_DOCUMENTS, { keyPath: 'id' });
+        docStore.createIndex('knowledgeBaseId', 'knowledgeBaseId', { unique: false });
+      }
+      // 知识库块
+      if (!db.objectStoreNames.contains(STORES.KNOWLEDGE_CHUNKS)) {
+        const chunkStore = db.createObjectStore(STORES.KNOWLEDGE_CHUNKS, { keyPath: 'id' });
+        chunkStore.createIndex('documentId', 'documentId', { unique: false });
+        chunkStore.createIndex('knowledgeBaseId', 'knowledgeBaseId', { unique: false });
       }
     },
   });

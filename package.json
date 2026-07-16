@@ -15,6 +15,7 @@
   "dependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
     "docx": "^9.7.1",
+    "flexsearch": "^0.8.212",
     "html2canvas": "^1.4.1",
     "idb": "^8.0.3",
     "jspdf": "^4.2.1",

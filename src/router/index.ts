@@ -31,6 +31,12 @@ const router = createRouter({
       component: () => import('@/pages/SettingsPage.vue'),
       meta: { title: '设置' },
     },
+    {
+      path: '/knowledge',
+      name: 'knowledge',
+      component: () => import('@/pages/KnowledgeBasePage.vue'),
+      meta: { title: '知识库' },
+    },
   ],
 });
 

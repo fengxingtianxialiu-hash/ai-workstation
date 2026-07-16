@@ -14,6 +14,9 @@
 - ✅ 多智能体协作（流水线模式 + 主从模式，多 Agent 协同完成复杂任务）
 - ✅ 协作中间结果完整展示（支持 Markdown 格式化、长内容折叠/展开）
 - ✅ 协作步骤单独下载（每个 Agent 的输出可独立导出为 Word 文档）
+- ✅ 知识库 RAG 功能（文档上传、结构化分块、全文检索、摘要预生成）
+- ✅ Agent 绑定知识库（对话时自动检索注入，来源溯源，原文查看）
+- ✅ 知识库检索优化（阈值过滤、去重合并、对话级缓存、Token 节省）
 - ✅ 协作执行前预检查（Agent 存在性、模型可用性、加密 API Key 检查）
 - ✅ 协作执行进度实时展示（流水线/主从步骤状态可视化）
 - ✅ 协作模式自动禁用联网搜索和图片生成（避免冲突）
@@ -37,6 +40,7 @@
 - ✅ Agent 与对话集成（选择 Agent、注入系统提示词、模型自动切换）
 - ✅ 协作团队管理（创建、编辑、删除、排序、导入导出、流水线/主从模式）
 - ✅ 协作执行引擎（串行执行、上下文传递与截断、错误处理、进度回调）
+- ✅ 知识库管理（创建、文档上传、分块存储、全文索引、检索注入）
 - ✅ 提示词库
 
 ### 4. 部署方案
@@ -56,19 +60,24 @@ myAlTools/
 │   └── DEPLOY.md          # Worker 部署文档
 ├── src/
 │   ├── pages/
-│   │   ├── ChatPage.vue   # 聊天页面（含协作执行进度展示）
-│   │   ├── AgentsPage.vue # Agent 管理 + 协作团队管理
+│   │   ├── ChatPage.vue   # 聊天页面（含协作执行进度展示、知识库检索注入）
+│   │   ├── AgentsPage.vue # Agent 管理 + 协作团队管理 + 知识库绑定
+│   │   ├── KnowledgeBasePage.vue # 知识库管理（文档上传、分块、检索）
 │   │   ├── PromptsPage.vue# 提示词库
 │   │   └── SettingsPage.vue# 设置页面
 │   ├── stores/            # Pinia 状态管理
 │   │   ├── crew.ts        # 协作团队 Store（CRUD + 导入导出）
+│   │   ├── knowledge.ts   # 知识库 Store（CRUD、文档、块管理）
 │   │   ├── agent.ts       # Agent Store
 │   │   ├── conversation.ts# 对话 Store
 │   │   └── model.ts       # 模型 Store
 │   ├── utils/             # 工具函数
 │   │   ├── crew-executor.ts# 协作执行引擎（流水线 + 主从）
+│   │   ├── document-parser.ts # 文档解析器（结构识别、分块、关键词提取）
+│   │   ├── document-processor.ts # 文档处理引擎（上传流程、摘要生成）
+│   │   ├── knowledge-search.ts # 知识库检索引擎（flexsearch 全文检索）
 │   │   ├── file-generator/ # 文档生成引擎（Word/PPT/PDF/Excel）
-│   │   └── api-client.ts  # API 客户端
+│   │   ── api-client.ts  # API 客户端
 │   ├── components/        # 组件
 │   ├── themes/            # 主题配置
 │   └── router/            # 路由配置
@@ -111,6 +120,7 @@ npm run deploy
 6. **零成本部署**：Cloudflare Workers + GitHub Pages 完全免费
 7. **多智能体协作**：流水线 + 主从双模式，串行执行引擎，上下文智能传递
 8. **协作结果可视化**：实时进度展示、中间结果完整呈现、单步文档下载
+9. **知识库 RAG**：结构化分块、全文检索、摘要预生成、Token 优化注入
 
 ## 后续优化建议
 
