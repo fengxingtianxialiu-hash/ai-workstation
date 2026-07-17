@@ -358,7 +358,7 @@
           </div>
           <!-- 知识库选择器 -->
           <div class="kb-picker">
-            <button class="tool-btn" :class="{ active: selectedKbIds.length > 0 }" @click="toggleKbPicker" :disabled="!!currentCrew" :title="currentCrew ? '协作模式下不可用' : '选择知识库'">
+            <button class="tool-btn" :class="{ active: selectedKbIds.length > 0 }" @click="toggleKbPicker" :title="'选择知识库'">
               <span class="tool-icon">📚</span>
               <span class="tool-label">{{ selectedKbIds.length > 0 ? `知识库(${selectedKbIds.length})` : '知识库' }}</span>
             </button>
@@ -623,7 +623,6 @@ function clearCrew() {
 
 /** 切换知识库选择器 */
 function toggleKbPicker() {
-  if (currentCrew.value) return;
   kbPickerOpen.value = !kbPickerOpen.value;
 }
 
@@ -807,6 +806,32 @@ async function executeCrew(userInput: string) {
     return;
   }
 
+  // 知识库检索：合并手动选择的知识库 + 团队中 Agent 绑定的知识库
+  let knowledgeContext = '';
+  let knowledgeSources: KnowledgeSource[] = [];
+  const crewKbIds = new Set<string>(selectedKbIds.value);
+  // 自动收集团队中所有 Agent 绑定的知识库
+  const allAgentIds = new Set<string>(crew.agents);
+  if (crew.commanderId) allAgentIds.add(crew.commanderId);
+  for (const agentId of allAgentIds) {
+    const agent = agentStore.getAgent(agentId);
+    if (agent?.knowledgeBaseIds) {
+      for (const kbId of agent.knowledgeBaseIds) {
+        crewKbIds.add(kbId);
+      }
+    }
+  }
+  if (crewKbIds.size > 0) {
+    // 临时设置 selectedKbIds 以复用 executeKnowledgeSearch
+    const originalKbIds = [...selectedKbIds.value];
+    selectedKbIds.value = [...crewKbIds];
+    const result = await executeKnowledgeSearch(userInput);
+    knowledgeContext = result.text;
+    knowledgeSources = result.sources;
+    // 恢复原始选择（保留用户手动选择的）
+    selectedKbIds.value = originalKbIds;
+  }
+
   // 创建对话
   if (!conversationStore.currentConversationId) {
     await conversationStore.createConversation({
@@ -833,7 +858,7 @@ async function executeCrew(userInput: string) {
           onStepStart: (idx, _agent) => { crewSteps.value[idx] = { ...crewSteps.value[idx], status: 'running' }; scrollToBottom(); },
           onStepComplete: (idx, output) => { crewSteps.value[idx] = { ...crewSteps.value[idx], status: 'completed', output }; scrollToBottom(); },
           onStepError: (idx, error) => { crewSteps.value[idx] = { ...crewSteps.value[idx], status: 'failed', error }; },
-        }, abortController.value.signal)
+        }, abortController.value.signal, knowledgeContext)
       : await executeCommander(crew, userInput, agentStore.agents, modelStore.models, modelStore.defaultModel, {
           onStepStart: (idx, _agent) => {
             if (crewSteps.value[idx]) {
@@ -845,7 +870,7 @@ async function executeCrew(userInput: string) {
           },
           onStepComplete: (idx, output) => { crewSteps.value[idx] = { ...crewSteps.value[idx], status: 'completed', output }; scrollToBottom(); },
           onStepError: (idx, error) => { crewSteps.value[idx] = { ...crewSteps.value[idx], status: 'failed', error }; },
-        }, abortController.value.signal);
+        }, abortController.value.signal, knowledgeContext);
 
     // 保存结果
     await conversationStore.addMessage({
@@ -853,6 +878,7 @@ async function executeCrew(userInput: string) {
       role: 'assistant',
       content: result.finalOutput,
       crewResult: result,
+      knowledgeSources: knowledgeSources.length > 0 ? knowledgeSources : undefined,
     });
 
     // 更新标题

@@ -1,6 +1,7 @@
 /**
  * 协作执行引擎
  * 实现流水线（Pipeline）和主从（Commander）模式的执行逻辑
+ * 支持知识库上下文注入：检索结果会传递给第一步/第一个子任务的系统提示词
  */
 
 import { sendChat } from '@/utils/api-client';
@@ -100,7 +101,8 @@ export async function executePipeline(
   models: ModelConfig[],
   defaultModel: ModelConfig | null,
   callbacks: CrewExecutorCallbacks,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  knowledgeContext?: string
 ): Promise<CrewResult> {
   const steps: CrewStep[] = crew.agents.map(agentId => ({
     agentId,
@@ -144,6 +146,11 @@ export async function executePipeline(
 
       // 注入系统提示词
       let systemPrompt = agent.systemPrompt || `你是一个${agent.role || 'AI助手'}。`;
+
+      // 第一步注入知识库上下文
+      if (i === 0 && knowledgeContext) {
+        systemPrompt += `\n\n---\n以下是从知识库中检索到的相关信息，请基于这些信息完成任务：\n${knowledgeContext}`;
+      }
 
       // 注入前序步骤结果
       if (previousOutput) {
@@ -198,7 +205,8 @@ export async function executeCommander(
   models: ModelConfig[],
   defaultModel: ModelConfig | null,
   callbacks: CrewExecutorCallbacks,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  knowledgeContext?: string
 ): Promise<CrewResult> {
   const commander = agents.find(a => a.id === crew.commanderId);
   if (!commander) {
@@ -211,6 +219,10 @@ export async function executeCommander(
   }
 
   // 第一步：指挥官拆解任务
+  const knowledgeSection = knowledgeContext
+    ? `\n\n相关知识库信息：\n${knowledgeContext}\n`
+    : '';
+
   const decomposePrompt = `你是一个任务规划专家。请将以下任务拆解为子任务，并分配给合适的执行者。
 
 可用执行者：
@@ -218,7 +230,7 @@ ${crew.agents.map(agentId => {
   const agent = agents.find(a => a.id === agentId);
   return agent ? `- ${agent.name} (ID: ${agent.id}): ${agent.role || '通用助手'}` : '';
 }).filter(Boolean).join('\n')}
-
+${knowledgeSection}
 用户任务：${userInput}
 
 请以 JSON 格式输出拆解计划，格式如下：
@@ -330,6 +342,11 @@ ${crew.agents.map(agentId => {
 
     try {
       let systemPrompt = agent.systemPrompt || `你是一个${agent.role || 'AI助手'}。`;
+
+      // 第一个子任务注入知识库上下文
+      if (i === 0 && knowledgeContext) {
+        systemPrompt += `\n\n---\n以下是从知识库中检索到的相关信息，请基于这些信息完成任务：\n${knowledgeContext}`;
+      }
 
       // 注入前序子任务结果
       if (subtaskOutputs.length > 0) {
