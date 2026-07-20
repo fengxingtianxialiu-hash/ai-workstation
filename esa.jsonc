@@ -1,5 +1,6 @@
 {
   "name": "ai-workstation",
+  "entry": "./proxy/worker.js",
   "installCommand": "npm install",
   "buildCommand": "npm run build",
   "assets": {
