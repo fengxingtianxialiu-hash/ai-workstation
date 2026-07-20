@@ -100,8 +100,10 @@ async function handleProxy(request, ctx) {
     const decoder = new TextDecoder();
     let buffer = '';
 
-    // 异步处理流数据
-    ctx.passThroughOnException();
+    // 异步处理流数据（passThroughOnException 仅 Cloudflare Workers 支持）
+    if (typeof ctx?.passThroughOnException === 'function') {
+      ctx.passThroughOnException();
+    }
     (async () => {
       try {
         while (true) {
