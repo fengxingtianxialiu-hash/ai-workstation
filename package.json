@@ -10,7 +10,8 @@
     "type-check": "vue-tsc --noEmit",
     "deploy:worker": "cd proxy && wrangler deploy",
     "deploy:pages": "npm run build && gh-pages -d dist",
-    "deploy": "npm run deploy:worker && npm run deploy:pages"
+    "deploy": "npm run deploy:worker && npm run deploy:pages",
+    "build:esa": "npm run build && echo '构建完成，请将 dist/ 和 proxy/worker.js 上传到 ESA 控制台'"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
