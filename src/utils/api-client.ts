@@ -34,7 +34,15 @@ export interface StreamCallbacks {
 /** 获取代理地址：优先使用环境变量，开发模式下自动适配当前主机地址 */
 function getProxyUrl(): string {
   const envUrl = import.meta.env.VITE_PROXY_URL;
-  if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) return envUrl.trim();
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
+    const trimmed = envUrl.trim();
+    // 如果是相对路径（以 / 开头），自动加上当前页面的 origin
+    if (trimmed.startsWith('/')) {
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      return `${origin}${trimmed}`;
+    }
+    return trimmed;
+  }
   // 开发模式：用当前页面主机名 + 3001 端口，兼容手机局域网访问
   const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
   return `http://${host}:3001/proxy`;
