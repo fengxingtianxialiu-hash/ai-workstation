@@ -1,7 +1,9 @@
 {
-  // 阿里云 ESA 边缘计算配置
+  "name": "ai-workstation",
+  "installCommand": "npm install",
   "buildCommand": "npm run build",
   "assets": {
-    "directory": "dist"
+    "directory": "./dist",
+    "notFoundStrategy": "singlePageApplication"
   }
 }
