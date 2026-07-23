@@ -195,6 +195,11 @@ function parseRawSSEChunk(json: any): { content: string; thinking: string; done:
     result.done = true;
     return result;
   }
+  if (json.type === 'response.content_part.done' && json.part?.type === 'output_text' && json.part.text) {
+    result.content = json.part.text;
+    result.done = true;
+    return result;
+  }
 
   // 阿里云格式
   if (json.output?.text) {
