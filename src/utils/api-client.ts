@@ -170,18 +170,20 @@ function parseRawSSEChunk(json: any): { content: string; thinking: string; done:
 
   // 标准 OpenAI 格式 - 正文和思考
   const choice = json.choices?.[0];
-  if (choice?.finish_reason) {
-    // 结束标记：content 可能为空，必须设置 done 让循环结束
-    result.done = true;
-    return result;
-  }
   const delta = choice?.delta;
   if (delta?.content) {
     result.content = delta.content;
+    // 同一个 chunk 可能同时带有 content 和 finish_reason
+    if (choice.finish_reason) result.done = true;
     return result;
   }
   if (delta?.reasoning_content) {
     result.thinking = delta.reasoning_content;
+    return result;
+  }
+  if (choice?.finish_reason) {
+    // 结束标记：content 为空但必须让循环结束
+    result.done = true;
     return result;
   }
 
