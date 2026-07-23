@@ -6,5 +6,19 @@
   "assets": {
     "directory": "./dist",
     "notFoundStrategy": "singlePageApplication"
-  }
+  },
+  "routes": [
+    {
+      "path": "/proxy",
+      "function": "./proxy/worker.js"
+    },
+    {
+      "path": "/search",
+      "function": "./proxy/worker.js"
+    },
+    {
+      "path": "/image-gen",
+      "function": "./proxy/worker.js"
+    }
+  ]
 }

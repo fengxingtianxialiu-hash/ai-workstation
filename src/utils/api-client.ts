@@ -35,13 +35,10 @@ export interface StreamCallbacks {
 function getProxyUrl(): string {
   const envUrl = import.meta.env.VITE_PROXY_URL;
   if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
-    const trimmed = envUrl.trim();
-    // 如果是相对路径（以 / 开头），自动加上当前页面的 origin
-    if (trimmed.startsWith('/')) {
-      const origin = typeof window !== 'undefined' ? window.location.origin : '';
-      return `${origin}${trimmed}`;
-    }
-    return trimmed;
+    // 如果是相对路径（以 / 开头），直接使用
+    if (envUrl.startsWith('/')) return envUrl.trim();
+    // 如果是完整 URL，直接返回
+    return envUrl.trim();
   }
   // 开发模式：用当前页面主机名 + 3001 端口，兼容手机局域网访问
   const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';

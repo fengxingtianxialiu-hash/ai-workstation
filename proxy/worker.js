@@ -1,9 +1,9 @@
 /**
- * AI API Cloudflare Worker 代理
- * 部署到 Cloudflare Workers 后，前端可直接访问，无需本地服务器
+ * AI API 代理（Edge Function）
+ * 部署到阿里云 ESA Edge Function，与前端同域，无需 CORS
  */
 
-// CORS 头
+// CORS 头（同域部署时可简化，但保留以兼容本地开发）
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
