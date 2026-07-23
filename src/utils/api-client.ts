@@ -173,7 +173,6 @@ function parseRawSSEChunk(json: any): { content: string; thinking: string; done:
   const delta = choice?.delta;
   if (delta?.content) {
     result.content = delta.content;
-    // 同一个 chunk 可能同时带有 content 和 finish_reason
     if (choice.finish_reason) result.done = true;
     return result;
   }
@@ -182,14 +181,13 @@ function parseRawSSEChunk(json: any): { content: string; thinking: string; done:
     return result;
   }
   if (choice?.finish_reason) {
-    // 结束标记：content 为空但必须让循环结束
     result.done = true;
     return result;
   }
 
   // 火山方舟 Responses API - 正文
   if (json.type === 'response.output_text.delta' && json.delta) {
-    result.content = json.delta;
+    result.content = typeof json.delta === 'string' ? json.delta : json.delta.value || '';
     return result;
   }
   if (json.type === 'response.output_text.done') {
@@ -207,6 +205,13 @@ function parseRawSSEChunk(json: any): { content: string; thinking: string; done:
   if (json.output?.choices?.[0]?.message?.content) {
     result.content = json.output.choices[0].message.content;
     return result;
+  }
+
+  // 通用兼容：某些自定义 API 直接返回 content/text/delta
+  if (!json.type) {
+    if (json.content) result.content = json.content;
+    else if (json.text) result.content = json.text;
+    else if (json.delta) result.content = json.delta;
   }
 
   return result;
