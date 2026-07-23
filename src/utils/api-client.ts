@@ -156,7 +156,8 @@ function parseRawSSEChunk(json: any): { content: string; thinking: string; done:
   }
   if (json.type === 'response.reasoning_summary_text.done') {
     if (json.text) result.thinking = json.text;
-    result.done = true;
+    // 注意：火山方舟 Responses API 中，thinking 完成后还会继续返回正文，
+    // 这里不能设置 done=true，否则正文事件会被跳过
     return result;
   }
   if (json.type === 'response.thought.delta' && json.delta) {
