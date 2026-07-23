@@ -130,6 +130,74 @@ export async function generateImage(
 }
 
 /**
+ * 从原始 SSE chunk 中提取内容和思考过程（支持多平台格式）
+ */
+function parseRawSSEChunk(json: any): { content: string; thinking: string; done: boolean } {
+  const result = { content: '', thinking: '', done: false };
+
+  // 跳过元数据事件
+  const skipTypes = [
+    'response.created', 'response.in_progress', 'response.output_item.added',
+    'response.output_item.done', 'response.content_part.added', 'response.content_part.done',
+    'response.completed', 'response.reasoning_summary_part.added', 'response.reasoning_summary_part.done',
+  ];
+  if (skipTypes.includes(json.type)) return result;
+
+  // 火山方舟 Responses API - 思考过程
+  if (json.type === 'response.reasoning_summary_text.delta' && json.delta) {
+    result.thinking = json.delta;
+    return result;
+  }
+  if (json.type === 'response.reasoning_summary_text.done' && json.text) {
+    result.thinking = json.text;
+    return result;
+  }
+  if (json.type === 'response.thought.delta' && json.delta) {
+    result.thinking = json.delta;
+    return result;
+  }
+  if (json.type === 'response.thought.done' && json.thought) {
+    result.thinking = json.thought;
+    return result;
+  }
+
+  // 标准 OpenAI 格式 - 正文和思考
+  const delta = json.choices?.[0]?.delta;
+  if (delta?.content) {
+    result.content = delta.content;
+    if (json.choices[0].finish_reason) result.done = true;
+    return result;
+  }
+  if (delta?.reasoning_content) {
+    result.thinking = delta.reasoning_content;
+    return result;
+  }
+
+  // 火山方舟 Responses API - 正文
+  if (json.type === 'response.output_text.delta' && json.delta) {
+    result.content = json.delta;
+    return result;
+  }
+  if (json.type === 'response.output_text.done' && json.text) {
+    result.content = json.text;
+    return result;
+  }
+
+  // 阿里云格式
+  if (json.output?.text) {
+    result.content = json.output.text;
+    if (json.output.finish_reason) result.done = true;
+    return result;
+  }
+  if (json.output?.choices?.[0]?.message?.content) {
+    result.content = json.output.choices[0].message.content;
+    return result;
+  }
+
+  return result;
+}
+
+/**
  * 发送流式对话请求
  */
 export async function sendChatStream(
@@ -187,14 +255,11 @@ export async function sendChatStream(
             return;
           }
           try {
-            const chunk = JSON.parse(data);
-            if (chunk.content) {
-              callbacks.onChunk(chunk.content);
-            }
-            if (chunk.thinking && callbacks.onThinkingChunk) {
-              callbacks.onThinkingChunk(chunk.thinking);
-            }
-            if (chunk.finish_reason) {
+            const json = JSON.parse(data);
+            const { content, thinking, done } = parseRawSSEChunk(json);
+            if (content) callbacks.onChunk(content);
+            if (thinking && callbacks.onThinkingChunk) callbacks.onThinkingChunk(thinking);
+            if (done) {
               callbacks.onDone();
               return;
             }

@@ -93,66 +93,14 @@ async function handleProxy(request, ctx) {
       });
     }
 
-    // 使用 TransformStream 处理流式响应
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    // 异步处理流数据（passThroughOnException 仅 Cloudflare Workers 支持）
-    if (typeof ctx?.passThroughOnException === 'function') {
-      ctx.passThroughOnException();
-    }
-    (async () => {
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6).trim();
-              if (data === '[DONE]') {
-                await writer.write(new TextEncoder().encode('data: [DONE]\n\n'));
-                continue;
-              }
-              try {
-                const json = JSON.parse(data);
-                console.log('Stream chunk:', JSON.stringify(json).slice(0, 200));
-                const { content, thinking } = extractStreamContent(json);
-                if (content || thinking) {
-                  const chunk = {
-                    content: content || '',
-                    thinking: thinking || '',
-                    finish_reason: json.choices?.[0]?.finish_reason || null,
-                  };
-                  await writer.write(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`));
-                }
-              } catch {
-                await writer.write(new TextEncoder().encode(`${line}\n`));
-              }
-            }
-          }
-        }
-        await writer.write(new TextEncoder().encode('data: [DONE]\n\n'));
-      } catch (error) {
-        console.error('Stream error:', error.message);
-      } finally {
-        await writer.close();
-      }
-    })();
-
-    return new Response(readable, {
+    // 直接透传原始 SSE 流，不做逐 chunk 解析（降低 CPU 消耗，避免 ESA CPU 超限）
+    // 前端负责解析各平台的原始 SSE 格式
+    return new Response(response.body, {
+      status: response.status,
       headers: {
         ...CORS_HEADERS,
-        'Content-Type': 'text/event-stream',
+        'Content-Type': response.headers.get('Content-Type') || 'text/event-stream',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
       },
     });
   }
