@@ -135,21 +135,28 @@ export async function generateImage(
 function parseRawSSEChunk(json: any): { content: string; thinking: string; done: boolean } {
   const result = { content: '', thinking: '', done: false };
 
-  // 跳过元数据事件
+  // 跳过纯元数据事件
   const skipTypes = [
     'response.created', 'response.in_progress', 'response.output_item.added',
     'response.output_item.done', 'response.content_part.added', 'response.content_part.done',
-    'response.completed', 'response.reasoning_summary_part.added', 'response.reasoning_summary_part.done',
+    'response.reasoning_summary_part.added', 'response.reasoning_summary_part.done',
   ];
   if (skipTypes.includes(json.type)) return result;
+
+  // 火山方舟 Responses API - 完成事件
+  if (json.type === 'response.completed') {
+    result.done = true;
+    return result;
+  }
 
   // 火山方舟 Responses API - 思考过程
   if (json.type === 'response.reasoning_summary_text.delta' && json.delta) {
     result.thinking = json.delta;
     return result;
   }
-  if (json.type === 'response.reasoning_summary_text.done' && json.text) {
-    result.thinking = json.text;
+  if (json.type === 'response.reasoning_summary_text.done') {
+    if (json.text) result.thinking = json.text;
+    result.done = true;
     return result;
   }
   if (json.type === 'response.thought.delta' && json.delta) {
@@ -162,10 +169,15 @@ function parseRawSSEChunk(json: any): { content: string; thinking: string; done:
   }
 
   // 标准 OpenAI 格式 - 正文和思考
-  const delta = json.choices?.[0]?.delta;
+  const choice = json.choices?.[0];
+  if (choice?.finish_reason) {
+    // 结束标记：content 可能为空，必须设置 done 让循环结束
+    result.done = true;
+    return result;
+  }
+  const delta = choice?.delta;
   if (delta?.content) {
     result.content = delta.content;
-    if (json.choices[0].finish_reason) result.done = true;
     return result;
   }
   if (delta?.reasoning_content) {
@@ -178,8 +190,9 @@ function parseRawSSEChunk(json: any): { content: string; thinking: string; done:
     result.content = json.delta;
     return result;
   }
-  if (json.type === 'response.output_text.done' && json.text) {
-    result.content = json.text;
+  if (json.type === 'response.output_text.done') {
+    if (json.text) result.content = json.text;
+    result.done = true;
     return result;
   }
 
