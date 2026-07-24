@@ -26,12 +26,12 @@ export default {
     const pathname = url.pathname;
 
     try {
-      // 路由处理
-      if (pathname === '/proxy') {
+      // 路由处理（兼容通配符路径）
+      if (pathname === '/proxy' || pathname.startsWith('/proxy/')) {
         return await handleProxy(request, ctx);
-      } else if (pathname === '/search') {
+      } else if (pathname === '/search' || pathname.startsWith('/search/')) {
         return await handleSearch(request);
-      } else if (pathname === '/image-gen') {
+      } else if (pathname === '/image-gen' || pathname.startsWith('/image-gen/')) {
         return await handleImageGen(request);
       }
 
@@ -133,28 +133,176 @@ async function handleSearch(request) {
   console.log('=== Web Search ===');
   console.log('query:', query);
 
-  const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=10&setlang=zh-Hans&cc=CN`;
-  const response = await fetch(searchUrl, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    },
-  });
+  // 尝试多种搜索引擎，提高成功率
+  let results = [];
 
-  if (!response.ok) {
-    return new Response(JSON.stringify({ error: `Search failed: HTTP ${response.status}` }), {
-      status: 502,
-      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-    });
+  // 优先尝试 DuckDuckGo HTML 版（对边缘节点更友好）
+  results = await searchDuckDuckGo(query);
+
+  // 如果 DuckDuckGo 无结果，回退到 Bing
+  if (results.length === 0) {
+    console.log('DuckDuckGo returned 0 results, trying Bing...');
+    results = await searchBing(query);
   }
-
-  const html = await response.text();
-  const results = parseBingResults(html);
 
   console.log(`Found ${results.length} results`);
   return new Response(JSON.stringify({ query, results }), {
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   });
+}
+
+/**
+ * DuckDuckGo 搜索（HTML 版本）
+ */
+async function searchDuckDuckGo(query) {
+  const results = [];
+  const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+
+  try {
+    const response = await fetch(searchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      },
+      redirect: 'follow',
+    });
+
+    if (!response.ok) {
+      console.log('DuckDuckGo HTTP error:', response.status);
+      return results;
+    }
+
+    const html = await response.text();
+
+    // DuckDuckGo HTML 版本的结果块
+    const resultRegex = /<div[^>]*class="result[^"]*"[^>]*>([\s\S]*?)<\/div>\s*(?:<div[^>]*class="result[^"]*"[^>]*>|<\/div>\s*<\/div>)/g;
+    let match;
+
+    while ((match = resultRegex.exec(html)) !== null && results.length < 8) {
+      const block = match[1];
+
+      // 提取链接
+      const linkMatch = block.match(/class="result__a"[^>]*href="(https?:\/\/[^"]*)"/i);
+      if (!linkMatch) continue;
+
+      let url = linkMatch[1];
+      // DuckDuckGo 可能使用重定向链接
+      const uddgMatch = url.match(/uddg=([^&]+)/);
+      if (uddgMatch) {
+        url = decodeURIComponent(uddgMatch[1]);
+      }
+
+      // 提取标题
+      const titleMatch = block.match(/class="result__a"[^>]*>([\s\S]*?)<\/a>/i);
+      if (!titleMatch) continue;
+      const title = titleMatch[1].replace(/<[^>]*>/g, '').trim();
+
+      // 提取摘要
+      let snippet = '';
+      const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/(?:span|div|a)>/i);
+      if (snippetMatch) {
+        snippet = snippetMatch[1].replace(/<[^>]*>/g, '').trim();
+      }
+
+      if (title && url) {
+        results.push({ title, url, snippet });
+      }
+    }
+
+    // 备用解析：更宽松的匹配
+    if (results.length === 0) {
+      const altRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi;
+      let altMatch;
+      while ((altMatch = altRegex.exec(html)) !== null && results.length < 8) {
+        let url = altMatch[1];
+        const uddgMatch = url.match(/uddg=([^&]+)/);
+        if (uddgMatch) url = decodeURIComponent(uddgMatch[1]);
+
+        const title = altMatch[2].replace(/<[^>]*>/g, '').trim();
+        if (!title) continue;
+
+        // 找摘要
+        let snippet = '';
+        const snippetIdx = altMatch.index + altMatch[0].length;
+        const afterLink = html.substring(snippetIdx, snippetIdx + 500);
+        const snipMatch = afterLink.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/(?:span|div|a)>/i);
+        if (snipMatch) snippet = snipMatch[1].replace(/<[^>]*>/g, '').trim();
+
+        results.push({ title, url, snippet });
+      }
+    }
+  } catch (error) {
+    console.log('DuckDuckGo search error:', error.message);
+  }
+
+  return results;
+}
+
+/**
+ * Bing 搜索（备用）
+ */
+async function searchBing(query) {
+  const results = [];
+  const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=10&setlang=zh-Hans&cc=CN`;
+
+  try {
+    const response = await fetch(searchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      },
+      redirect: 'follow',
+    });
+
+    if (!response.ok) {
+      console.log('Bing HTTP error:', response.status);
+      return results;
+    }
+
+    const html = await response.text();
+
+    // 检查是否返回了验证码页面
+    if (html.includes('captcha') || html.includes('challenge') || html.includes('unusual traffic')) {
+      console.log('Bing returned captcha/challenge page');
+      return results;
+    }
+
+    // 解析 Bing 结果
+    const blockRegex = /<li[^>]*class="b_algo"[^>]*>([\s\S]*?)<\/li>/g;
+    let match;
+    let count = 0;
+
+    while ((match = blockRegex.exec(html)) !== null && count < 8) {
+      const block = match[1];
+
+      const h2Match = block.match(/<h2[^>]*>\s*<a[^>]*href="(https?:[^"]*)"[^>]*>([\s\S]*?)<\/a>/i);
+      if (!h2Match) continue;
+
+      const url = h2Match[1];
+      const title = h2Match[2].replace(/<[^>]*>/g, '').trim();
+
+      let snippet = '';
+      const captionMatch = block.match(/class="b_caption"[^>]*>([\s\S]*?)<\/div>/i);
+      if (captionMatch) {
+        const pMatch = captionMatch[1].match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+        if (pMatch) snippet = pMatch[1].replace(/<[^>]*>/g, '').trim();
+      }
+      if (!snippet) {
+        const pMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+        if (pMatch) snippet = pMatch[1].replace(/<[^>]*>/g, '').trim();
+      }
+
+      if (title && url && !url.includes('bing.com/aclk') && !url.includes('go.microsoft.com')) {
+        results.push({ title, url, snippet });
+        count++;
+      }
+    }
+  } catch (error) {
+    console.log('Bing search error:', error.message);
+  }
+
+  return results;
 }
 
 /**
