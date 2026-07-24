@@ -20,11 +20,11 @@
 
 #### Scenario: Token mode request
 - **WHEN** 用户选择 Token 模式的模型进行对话
-- **THEN** 系统按标准 OpenAI 兼容格式构造请求发送到 CF Worker
+- **THEN** 系统按标准 OpenAI 兼容格式构造请求发送到代理层
 
 #### Scenario: Coding Plan mode request
 - **WHEN** 用户选择 Coding Plan 模式的模型进行对话
-- **THEN** 系统按该平台的特定格式构造请求，CF Worker 负责协议转换
+- **THEN** 系统按该平台的特定格式构造请求，代理层负责协议转换
 
 ### Requirement: Three-level model switching
 系统 SHALL 支持三级模型优先级：全局默认 → Agent 覆盖 → 会话临时切换。

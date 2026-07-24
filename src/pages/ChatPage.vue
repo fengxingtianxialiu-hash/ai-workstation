@@ -97,6 +97,11 @@
                   :src="img"
                   class="msg-image"
                   alt="图片"
+                  @click="previewImage(img)"
+                  @contextmenu.prevent="downloadImage(img, $event)"
+                  @touchstart="handleImageTouchStart(img, $event)"
+                  @touchend="handleImageTouchEnd"
+                  @touchmove="handleImageTouchEnd"
                 />
               </div>
               <!-- 生成的图片 -->
@@ -107,6 +112,11 @@
                   :src="img"
                   class="msg-image generated-image"
                   alt="生成的图片"
+                  @click="previewImage(img)"
+                  @contextmenu.prevent="downloadImage(img, $event)"
+                  @touchstart="handleImageTouchStart(img, $event)"
+                  @touchend="handleImageTouchEnd"
+                  @touchmove="handleImageTouchEnd"
                 />
               </div>
               <!-- 思考过程 -->
@@ -295,14 +305,6 @@
         </div>
       </div>
 
-      <!-- 图片预览区 -->
-      <div v-if="pendingImages.length > 0" class="image-preview-bar">
-        <div v-for="(img, idx) in pendingImages" :key="idx" class="preview-thumb">
-          <img :src="img" alt="预览" />
-          <button class="remove-img" @click="removePendingImage(idx)">×</button>
-        </div>
-      </div>
-
       <!-- 联网搜索结果预览 -->
       <div v-if="isSearching" class="search-status-bar">
         <span class="search-spinner"></span>
@@ -337,7 +339,7 @@
         <div class="input-toolbar">
           <!-- 协作选择器 -->
           <div class="crew-picker">
-            <button class="tool-btn" :class="{ active: currentCrew }" @click="crewPickerOpen = !crewPickerOpen">
+            <button class="tool-btn" :class="{ active: currentCrew }" @click="crewPickerOpen = !crewPickerOpen" :title="currentCrew ? `协作：${currentCrew.name}` : '多智能体协作'">
               <span class="tool-icon">{{ currentCrew ? '👥' : '🤝' }}</span>
               <span class="tool-label">{{ currentCrew?.name || '协作' }}</span>
             </button>
@@ -358,7 +360,7 @@
           </div>
           <!-- 知识库选择器 -->
           <div class="kb-picker">
-            <button class="tool-btn" :class="{ active: selectedKbIds.length > 0 }" @click="toggleKbPicker" :title="'选择知识库'">
+            <button class="tool-btn" :class="{ active: selectedKbIds.length > 0 }" @click="toggleKbPicker" title="知识库">
               <span class="tool-icon">📚</span>
               <span class="tool-label">{{ selectedKbIds.length > 0 ? `知识库(${selectedKbIds.length})` : '知识库' }}</span>
             </button>
@@ -390,7 +392,7 @@
               class="tool-btn"
               :class="{ active: currentAgent }"
               @click="agentPickerOpen = !agentPickerOpen"
-              :title="currentAgent ? `当前 Agent：${currentAgent.name}` : '选择 Agent'"
+              :title="currentAgent ? `Agent：${currentAgent.name}` : '选择智能助手'"
             >
               <span class="tool-icon">{{ currentAgent?.avatar || '🤖' }}</span>
               <span class="tool-label">{{ currentAgent?.name || 'Agent' }}</span>
@@ -429,7 +431,7 @@
             :class="{ active: webSearchEnabled }"
             :disabled="!!currentCrew"
             @click="webSearchEnabled = !webSearchEnabled"
-            :title="currentCrew ? '协作模式下不可用' : (webSearchEnabled ? '关闭联网搜索' : '开启联网搜索')"
+            :title="currentCrew ? '协作模式下不可用' : (webSearchEnabled ? '已开启联网搜索' : '联网搜索')"
           >
             <span class="tool-icon">🌐</span>
             <span class="tool-label">联网</span>
@@ -439,7 +441,7 @@
             :class="{ active: imageGenEnabled }"
             :disabled="!!currentCrew"
             @click="imageGenEnabled = !imageGenEnabled"
-            :title="currentCrew ? '协作模式下不可用' : (imageGenEnabled ? '关闭图片生成' : '开启图片生成')"
+            :title="currentCrew ? '协作模式下不可用' : (imageGenEnabled ? '已开启AI画图' : 'AI画图')"
           >
             <span class="tool-icon">🎨</span>
             <span class="tool-label">画图</span>
@@ -447,40 +449,62 @@
         </div>
 
         <div class="input-container">
-          <button class="upload-btn" @click="triggerImageUpload" title="上传图片">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-          </button>
-          <input
-            ref="fileInputRef"
-            type="file"
-            accept="image/jpeg,image/png,image/gif,image/webp"
-            multiple
-            style="display: none"
-            @change="handleImageSelect"
-          />
-          <textarea
-            v-model="inputText"
-            class="message-input"
-            :placeholder="isMobile ? '输入消息...' : '输入消息... (Enter 发送, Shift+Enter 换行)'"
-            rows="1"
-            @keydown.enter.exact.prevent="sendMessage"
-            @input="autoResize"
-          ></textarea>
-          <button
-            v-if="!isLoading && !crewExecuting"
-            class="send-btn"
-            :disabled="!canSend"
-            @click="sendMessage"
-          >
-            发送
-          </button>
-          <button
-            v-if="isLoading || crewExecuting"
-            class="stop-btn"
-            @click="stopGeneration"
-          >
-            {{ crewExecuting ? '停止协作' : '停止' }}
-          </button>
+          <div class="input-box">
+            <!-- 图片预览（放在输入框内部第一行） -->
+            <div v-if="pendingImages.length > 0" class="input-image-preview-bar">
+              <div
+                v-for="(img, idx) in pendingImages"
+                :key="idx"
+                class="input-preview-thumb"
+                @click="previewImage(img)"
+              >
+                <img :src="img" alt="预览" />
+                <button
+                  class="input-remove-img"
+                  @click.stop="removePendingImage(idx)"
+                  title="移除图片"
+                >×</button>
+              </div>
+            </div>
+            <div class="message-input-row">
+              <button class="upload-btn" @click="triggerImageUpload" title="添加图片">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              </button>
+              <textarea
+                v-model="inputText"
+                class="message-input"
+                :placeholder="isMobile ? '输入消息...' : '输入消息... (Enter 发送, Shift+Enter 换行)'"
+                rows="1"
+                @keydown.enter.exact.prevent="sendMessage"
+                @input="autoResize"
+              ></textarea>
+              <button
+                v-if="!isLoading && !crewExecuting"
+                class="send-btn-inline"
+                :disabled="!canSend"
+                @click="sendMessage"
+                title="发送消息"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              </button>
+              <button
+                v-if="isLoading || crewExecuting"
+                class="stop-btn-inline"
+                @click="stopGeneration"
+                :title="crewExecuting ? '停止协作任务' : '停止生成'"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+              </button>
+            </div>
+            <input
+              ref="fileInputRef"
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              multiple
+              style="display: none"
+              @change="handleImageSelect"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -500,6 +524,12 @@
           <button class="btn-secondary" @click="originalTextChunk = null">关闭</button>
         </div>
       </div>
+    </div>
+
+    <!-- 图片预览弹窗 -->
+    <div v-if="previewImageUrl" class="image-preview-overlay" @click.self="closeImagePreview">
+      <button class="image-preview-close" @click="closeImagePreview">×</button>
+      <img :src="previewImageUrl" class="image-preview-img" alt="预览" />
     </div>
   </div>
 </template>
@@ -919,6 +949,8 @@ const searchResults = ref<SearchResult[]>([]);
 const searchStatusText = ref('正在分析问题...');
 const sidebarOpen = ref(false);
 const rawMdIds = ref<Set<string>>(new Set());
+const previewImageUrl = ref<string>('');
+const longPressTimer = ref<number | null>(null);
 
 function toggleMdView(id: string) {
   const newSet = new Set(rawMdIds.value);
@@ -1418,7 +1450,20 @@ async function handleImageSelect(event: Event) {
   const files = target.files;
   if (!files) return;
 
-  for (const file of Array.from(files)) {
+  const maxCount = 5;
+  const remainingSlots = maxCount - pendingImages.value.length;
+  if (remainingSlots <= 0) {
+    showToast(`最多上传 ${maxCount} 张图片`, 'error');
+    target.value = '';
+    return;
+  }
+
+  const selectedFiles = Array.from(files).slice(0, remainingSlots);
+  if (files.length > remainingSlots) {
+    showToast(`已超出上限，仅保留前 ${remainingSlots} 张`, 'info');
+  }
+
+  for (const file of selectedFiles) {
     const validation = validateImage(file);
     if (!validation.valid) {
       showToast(validation.error || '图片无效', 'error');
@@ -1426,7 +1471,6 @@ async function handleImageSelect(event: Event) {
     }
 
     try {
-      showToast('正在压缩图片...', 'info');
       const compressed = await compressImage(file);
       pendingImages.value.push(compressed);
     } catch {
@@ -1746,6 +1790,38 @@ function scrollToBottom() {
       messageListRef.value.scrollTop = messageListRef.value.scrollHeight;
     }
   });
+}
+
+function previewImage(url: string) {
+  previewImageUrl.value = url;
+}
+
+function closeImagePreview() {
+  previewImageUrl.value = '';
+}
+
+function downloadImage(url: string, event?: Event) {
+  event?.preventDefault();
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `image-${Date.now()}.png`;
+  link.target = '_blank';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function handleImageTouchStart(url: string, event: TouchEvent) {
+  longPressTimer.value = window.setTimeout(() => {
+    downloadImage(url, event);
+  }, 800);
+}
+
+function handleImageTouchEnd() {
+  if (longPressTimer.value) {
+    clearTimeout(longPressTimer.value);
+    longPressTimer.value = null;
+  }
 }
 
 onMounted(async () => {
@@ -2121,6 +2197,45 @@ onMounted(async () => {
   max-height: 200px;
   border-radius: var(--radius-md);
   object-fit: cover;
+}
+
+.image-preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.image-preview-close {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  font-size: 24px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.image-preview-close:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.image-preview-img {
+  max-width: 90%;
+  max-height: 90%;
+  object-fit: contain;
+  border-radius: var(--radius-md);
 }
 
 .message-text {
@@ -2499,7 +2614,15 @@ onMounted(async () => {
   }
 }
 
-/* === 图片预览条 === */
+/* === 图片预览条（输入框内联） === */
+.image-preview-bar-inline {
+  display: flex;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) 0;
+  overflow-x: auto;
+}
+
+/* === 图片预览条（旧版，保留兼容） === */
 .image-preview-bar {
   display: flex;
   gap: var(--spacing-sm);
@@ -3011,24 +3134,109 @@ onMounted(async () => {
   align-items: flex-end;
 }
 
-.upload-btn {
-  width: 44px;
-  height: 44px;
+.input-box {
+  flex: 1;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   justify-content: center;
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   background: var(--bg-primary);
+  position: relative;
+  padding: var(--spacing-sm);
+  min-height: 44px;
+}
+
+.input-box:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--color-primary-bg);
+}
+
+.input-image-preview-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+  padding: 0 0 var(--spacing-xs) 0;
+  order: -1;
+}
+
+.input-preview-thumb {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.input-preview-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+}
+
+.input-remove-img {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--color-error);
+  color: white;
+  border: 2px solid var(--bg-primary);
+  font-size: 11px;
+  font-weight: bold;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  z-index: 1;
+}
+
+.input-preview-thumb:hover .input-remove-img {
+  display: flex;
+}
+
+.message-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.message-input {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  border-radius: 0;
+  font-size: var(--font-size-base);
+  color: var(--text-primary);
+  background: transparent;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+  line-height: 1.5;
+  max-height: 120px;
+}
+
+.upload-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: var(--font-size-lg);
   transition: all var(--transition-fast);
   flex-shrink: 0;
+  margin-bottom: 2px;
 }
 
 .upload-btn:hover {
-  border-color: var(--color-primary);
   background: var(--color-primary-bg);
   color: var(--color-primary);
 }
@@ -3038,64 +3246,42 @@ onMounted(async () => {
   height: 20px;
 }
 
-.message-input {
-  flex: 1;
-  padding: var(--spacing-md);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-base);
-  color: var(--text-primary);
-  background: var(--bg-primary);
-  resize: none;
-  outline: none;
-  font-family: inherit;
-  line-height: var(--line-height-normal);
-  max-height: 120px;
-  min-height: 44px;
-}
-
-.message-input:focus {
-  border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px var(--color-primary-bg);
-}
-
-.send-btn {
-  padding: var(--spacing-md) var(--spacing-lg);
-  background: var(--color-primary);
-  color: white;
+.send-btn-inline,
+.stop-btn-inline {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: none;
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-medium);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all var(--transition-fast);
-  white-space: nowrap;
+  flex-shrink: 0;
+  margin-bottom: 2px;
 }
 
-.send-btn:hover:not(:disabled) {
+.send-btn-inline {
+  background: var(--color-primary);
+  color: white;
+}
+
+.send-btn-inline:hover:not(:disabled) {
   background: var(--color-primary-hover);
 }
 
-.send-btn:disabled {
-  opacity: 0.5;
+.send-btn-inline:disabled {
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
-.stop-btn {
-  padding: var(--spacing-md) var(--spacing-lg);
+.stop-btn-inline {
   background: var(--color-error);
   color: white;
-  border: none;
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-medium);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  white-space: nowrap;
 }
 
-.stop-btn:hover {
-  background: #dc2626;
+.stop-btn-inline:hover {
+  opacity: 0.85;
 }
 
 /* === 侧边栏遮罩层（移动端） === */
@@ -3224,6 +3410,8 @@ onMounted(async () => {
     padding-bottom: calc(var(--spacing-sm) + env(safe-area-inset-bottom, 0));
     background: var(--bg-secondary);
     box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.08);
+    max-height: 50vh;
+    overflow-y: auto;
   }
 
   /* 消息列表留出底部空间给固定输入框 */
@@ -3274,13 +3462,44 @@ onMounted(async () => {
 
   .input-container {
     gap: var(--spacing-xs);
+    align-items: flex-end;
+  }
+
+  .input-box {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    min-height: 44px;
+  }
+
+  .input-image-preview-bar {
+    gap: var(--spacing-xs);
+  }
+
+  .input-preview-thumb {
+    width: 52px;
+    height: 52px;
+  }
+
+  .input-remove-img {
+    display: flex;
+    width: 20px;
+    height: 20px;
+    font-size: 14px;
+  }
+
+  .message-input-row {
     align-items: center;
   }
 
+  .message-input {
+    max-height: 100px;
+    padding: 6px 0;
+    font-size: 16px;
+    line-height: 1.5;
+  }
+
   .upload-btn {
-    width: 44px;
-    height: 44px;
-    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
   }
 
   .upload-btn svg {
@@ -3288,20 +3507,10 @@ onMounted(async () => {
     height: 20px;
   }
 
-  .message-input {
-    min-height: 44px;
-    max-height: 100px;
-    padding: var(--spacing-sm) var(--spacing-md);
-    font-size: 16px;
-    line-height: 1.4;
-  }
-
-  .send-btn,
-  .stop-btn {
-    padding: var(--spacing-sm) var(--spacing-md);
-    font-size: var(--font-size-sm);
-    min-height: 44px;
-    min-width: 60px;
+  .send-btn-inline,
+  .stop-btn-inline {
+    width: 32px;
+    height: 32px;
   }
 
   /* 图片预览 */

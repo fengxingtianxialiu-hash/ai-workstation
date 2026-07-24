@@ -9,7 +9,7 @@
 
 #### Scenario: Generate image from text prompt
 - **WHEN** 用户在画图模式下输入图片描述并发送
-- **THEN** 系统将描述发送到代理服务器的 `/image-gen` 端点，代理服务器调用图片生成专用模型（如 `doubao-pro-3_0`）生成图片
+- **THEN** 系统将描述发送到代理层的 `/image-gen` 端点，代理层调用图片生成专用模型（如 `doubao-pro-3_0`）生成图片
 
 #### Scenario: Image display in chat
 - **WHEN** 图片生成成功
@@ -24,12 +24,12 @@
 - **THEN** 系统关闭图片生成模式，后续发送消息恢复普通对话
 
 ### Requirement: Image generation API integration
-代理服务器 SHALL 提供 `/image-gen` 端点，自动推导图片生成 API URL 并使用专用模型。
+代理层 SHALL 提供 `/image-gen` 端点，自动推导图片生成 API URL 并使用专用模型。
 
 #### Scenario: URL derivation
 - **WHEN** 收到图片生成请求
-- **THEN** 代理服务器从对话 API URL 推导图片生成 URL（`/responses` → `/images/generations`）
+- **THEN** 代理层从对话 API URL 推导图片生成 URL（`/responses` → `/images/generations`）
 
 #### Scenario: Model selection
 - **WHEN** 调用图片生成 API
-- **THEN** 代理服务器使用图片生成专用模型（`doubao-pro-3_0`），而非文本对话模型
+- **THEN** 代理层使用图片生成专用模型（`doubao-pro-3_0`），而非文本对话模型

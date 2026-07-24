@@ -1,10 +1,10 @@
 ## Context
 
-本项目是一个全新的 AI 工作台，基于 Vue 3 + Vite 构建，部署在 GitHub Pages 上。作为个人工具，需要支持多种 AI 模型接入、Agent 角色管理、文件生成、提示词管理等功能。所有数据存储在客户端（localStorage + IndexedDB），通过 Node.js 本地代理服务器与 AI API 通信，解决跨域和协议适配问题。
+本项目是一个全新的 AI 工作台，基于 Vue 3 + Vite 构建，部署在 GitHub Pages 上。作为个人工具，需要支持多种 AI 模型接入、Agent 角色管理、文件生成、提示词管理等功能。所有数据存储在客户端（localStorage + IndexedDB），通过代理层与 AI API 通信，解决跨域和协议适配问题。生产环境使用阿里云 ESA Edge Function（与前端同域部署），本地开发使用 Node.js 代理服务器。
 
 **约束条件：**
-- 纯前端架构，无自有后端服务器（开发环境使用本地代理）
-- 部署在 GitHub Pages（静态站点）
+- 纯前端架构，无自有后端服务器（生产环境使用 ESA Edge Function，开发环境使用本地代理）
+- 部署在 GitHub Pages（静态站点），代理层部署在阿里云 ESA
 - API Key 由用户自行配置，存在客户端
 - 需考虑未来小程序端的兼容性
 - 面向中国用户，UI 风格现代化、清爽
@@ -16,7 +16,7 @@
 - 实现多模型、多 Agent 的灵活配置与切换
 - 数据完全本地化，支持一键备份/恢复
 - 主题系统可扩展，支持日/夜模式
-- 通过本地代理服务器解决跨域，支持 Token 和 Coding Plan 两种模式
+- 通过代理层解决跨域（生产环境 ESA Edge Function 同域部署，开发环境 Node.js 本地代理），支持 Token 和 Coding Plan 两种模式
 - 响应式设计，Web 端自适应，手机端体验良好
 - 支持思考过程与结论分离显示、联网搜索、图片生成
 
@@ -52,22 +52,23 @@
 
 **技术栈**: SheetJS (Excel)、docx.js (Word)、PptxGenJS (PPT)、jsPDF (PDF)
 
-### 3. 代理层：Node.js 本地代理服务器
+### 3. 代理层：阿里云 ESA Edge Function（生产）+ Node.js（本地开发）
 
-**选择**: Node.js + Express 作为本地代理服务器
+**选择**: 生产环境使用阿里云 ESA Edge Function（与前端同域部署），本地开发使用 Node.js + Express
 
 **理由**:
-- 开发环境本地运行，调试方便
-- 完美解决跨域问题
-- 可做协议适配（Token 模式 vs Coding Plan 模式）
-- 支持流式内容提取（思考过程 vs 正文分离）
+- ESA Edge Function 与前端同域部署，无需 CORS，解决跨域问题
+- 边缘节点就近响应，延迟低
+- 可做协议适配（Token 模式 vs Coding Plan 模式），根据 URL 路径判断（`/responses` 为 Responses API 格式）
+- 生产环境流式响应直接透传（降低 CPU 消耗），前端自行解析原始 SSE
 - 可扩展联网搜索（`/search`）和图片生成（`/image-gen`）端点
+- 本地开发使用 Node.js + Express，调试方便，支持逐 chunk 解析
 
-**替代方案**: 
+**替代方案**:
 - Cloudflare Worker — 需部署，调试不便，冷启动延迟
 - 浏览器直连 — 跨域问题无法解决
 
-**生产部署**: 未来可迁移到 CF Worker 或其他 Serverless 平台
+**双模式架构**: 生产环境（ESA）直接透传 SSE 流，前端解析；本地开发（Node.js）在代理端解析后返回结构化数据
 
 ### 4. 存储架构：分层存储 + 适配层
 
@@ -91,21 +92,23 @@
 
 ### 6. 思考过程与结论分离
 
-**选择**: 代理服务器识别思考过程事件，前端分别渲染
+**选择**: 生产环境（ESA）直接透传原始 SSE 流，前端自行解析思考过程事件并分别渲染；本地开发（Node.js）由代理端提取后返回
 
 **理由**:
 - 火山方舟 Responses API 的思考过程通过 `response.reasoning_summary_text.delta` 事件返回
-- 代理服务器提取思考内容和正文内容，分别返回给前端
+- 生产环境 ESA 直接透传 SSE 流（降低边缘节点 CPU 消耗），前端 `parseRawSSEChunk` 函数支持多平台 SSE 格式解析（火山方舟 Responses API、标准 OpenAI、阿里云等）
+- 本地开发 Node.js 代理端做逐 chunk 解析，提取思考内容和正文内容后返回结构化数据
 - 前端用不同样式渲染：思考过程小字（11px）、可折叠；结论正常字号（15px）
 
-### 7. 联网搜索：查询重写 + Bing 搜索
+### 7. 联网搜索：查询重写 + DuckDuckGo 优先（Bing 备用）
 
-**选择**: AI 查询重写 → Bing 搜索 → 结果注入上下文
+**选择**: AI 查询重写 → DuckDuckGo HTML 版搜索（优先）→ Bing 搜索（备用）→ 结果注入上下文
 
 **理由**:
 - 用户原始消息不适合直接搜索（如"天津今天天气怎么样"）
 - 先用 AI 提取关键词（"天津天气预报"），提高搜索精度
-- Bing 搜索无需 API Key，解析 HTML 返回结构化结果
+- DuckDuckGo HTML 版对边缘节点更友好，优先使用；无结果时回退到 Bing 搜索
+- 两者均无需 API Key，解析 HTML 返回结构化结果
 - 搜索结果注入用户消息，AI 基于搜索结果回答
 
 ### 8. 图片生成：专用模型 + 开关模式
@@ -166,10 +169,10 @@
 ## Risks / Trade-offs
 
 - **[IndexedDB 兼容性]** → 使用成熟的封装库（如 idb 或 Dexie），并在适配层做降级处理
-- **[本地代理服务器部署]** → 开发环境本地运行，生产环境需迁移到 Serverless 平台（如 CF Worker）
+- **[代理层双模式维护]** → 生产环境（ESA）和本地开发（Node.js）两套实现需保持行为一致，尤其是搜索和流式响应
 - **[小程序 storage 上限 10MB]** → 当前聚焦 H5，小程序端未来可通过裁剪对话历史、压缩数据应对
 - **[API Key 前端存储安全性]** → 个人工具可接受，加密功能降低风险；开源代码不含实际 Key
 - **[文件生成库体积]** → SheetJS、docx.js 等库较大，需按需加载（动态 import）
-- **[Bing 搜索 HTML 解析稳定性]** → HTML 结构可能变化，需定期维护解析逻辑
+- **[搜索引擎 HTML 解析稳定性]** → DuckDuckGo 和 Bing 的 HTML 结构可能变化，需定期维护解析逻辑
 - **[图片生成模型额度]** → 用户需确认 Coding Plan 包含图片生成模型额度
 - **[GitHub Pages 首次加载速度]** → 通过代码分割、懒加载、CDN 缓存优化

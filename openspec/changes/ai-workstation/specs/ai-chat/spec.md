@@ -27,7 +27,7 @@
 - **THEN** 系统在输入区域上方显示压缩后的图片预览，用户可删除或确认发送
 
 ### Requirement: Streaming output
-系统 SHALL 通过 fetch + ReadableStream 实现流式输出，AI 回复逐字显示。
+系统 SHALL 通过 fetch + ReadableStream 实现流式输出，AI 回复逐字显示。生产环境代理层直接透传原始 SSE 流，前端自行解析多平台 SSE 格式（火山方舟 Responses API、标准 OpenAI、阿里云等）。
 
 #### Scenario: Stream response display
 - **WHEN** AI 模型开始返回流式响应
