@@ -9,15 +9,15 @@
   },
   "routes": [
     {
-      "path": "/proxy",
+      "path": "/proxy/*",
       "function": "./proxy/worker.js"
     },
     {
-      "path": "/search",
+      "path": "/search/*",
       "function": "./proxy/worker.js"
     },
     {
-      "path": "/image-gen",
+      "path": "/image-gen/*",
       "function": "./proxy/worker.js"
     }
   ]
