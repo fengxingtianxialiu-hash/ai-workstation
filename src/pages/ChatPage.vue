@@ -156,12 +156,12 @@
                   <div v-for="(step, idx) in msg.crewResult.steps" :key="idx" class="crew-result-step">
                     <div class="crew-result-step-header">
                       <span class="crew-result-step-title">
-                        {{ step.status === 'completed' ? '✅' : '' }} 步骤 {{ idx + 1 }}: {{ getAgentName(step.agentId) }}
+                        {{ step.status === 'completed' ? '✅' : '' }} 步骤 {{ Number(idx) + 1 }}: {{ getAgentName(step.agentId) }}
                       </span>
                       <button
                         v-if="step.output && step.status === 'completed'"
                         class="crew-step-download-btn"
-                        @click.stop="downloadStepFile(msg.id, idx, 'word')"
+                        @click.stop="downloadStepFile(msg.id, Number(idx), 'word')"
                         title="下载为 Word 文档"
                       >
                         📄 下载
@@ -177,9 +177,9 @@
                       <button
                         v-if="step.output.length > 300"
                         class="crew-result-expand-btn"
-                        @click="toggleStepExpand(msg.id, idx)"
+                        @click="toggleStepExpand(msg.id, Number(idx))"
                       >
-                        {{ expandedStepIds.has(`${msg.id}-${idx}`) ? '收起' : '展开全文' }}
+                        {{ expandedStepIds.has(`${msg.id}-${Number(idx)}`) ? '收起' : '展开全文' }}
                       </button>
                     </div>
                     <div v-if="step.error" class="crew-result-step-error">{{ step.error }}</div>
